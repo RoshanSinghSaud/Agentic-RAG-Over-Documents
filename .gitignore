@@ -1,0 +1,30 @@
+# Project brief / memory — personal context, keep out of the public repo
+CLAUDE.md
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+.chroma/
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+
+# Virtualenv lives in the project root under this name (see README quickstart:
+# `python -m venv agentic-rag`). Never commit it — it's thousands of library files.
+/agentic-rag/
+
+# Editor / IDE settings — personal, not part of the project.
+.vscode/
+
+# Scratch / practice code — not part of the deliverable.
+test_src/
+
+# Don't commit the corpus (papers) — keep the repo light and avoid redistribution.
+data/*.pdf
+data/*.txt
+data/*.md
+!data/README.md

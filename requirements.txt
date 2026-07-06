@@ -1,0 +1,20 @@
+# --- Layer 1 (baseline RAG) ---
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-chroma>=0.1.4
+langchain-text-splitters>=0.3.0
+chromadb>=0.5.0
+rank-bm25>=0.2.2
+pypdf>=4.0.0
+python-dotenv>=1.0.0
+
+# --- Added in later layers (install when you reach them) ---
+# tavily-python>=0.5.0        # Layer 2: web-search fallback (CRAG)
+# langsmith>=0.1.0            # Layer 5: observability/tracing
+# fastapi>=0.110.0            # Layer 5: serving
+# uvicorn>=0.29.0            # Layer 5: serving
+# ragas>=0.2.0               # Eval harness (RAGAS)
+# datasets>=2.0.0            # RAGAS dependency
