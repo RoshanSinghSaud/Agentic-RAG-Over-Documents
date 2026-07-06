@@ -11,8 +11,10 @@ rank-bm25>=0.2.2
 pypdf>=4.0.0
 python-dotenv>=1.0.0
 
+# --- Layer 2 (CRAG) ---
+tavily-python>=0.5.0          # web-search fallback
+
 # --- Added in later layers (install when you reach them) ---
-# tavily-python>=0.5.0        # Layer 2: web-search fallback (CRAG)
 # langsmith>=0.1.0            # Layer 5: observability/tracing
 # fastapi>=0.110.0            # Layer 5: serving
 # uvicorn>=0.29.0            # Layer 5: serving

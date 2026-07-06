@@ -1,12 +1,12 @@
-"""CLI entry point for the agentic-rag baseline (Layer 1).
+"""CLI entry point for agentic-rag (Layer 2: CRAG).
 
 Usage:
     python main.py ingest                  # build the index from data/
+    python main.py ask "your question"     # query the CRAG graph
 
-    op: Ingested 156 document pages -> 718 chunks into Chroma at /Users/Roshan_Singh_Saud/Claude/Projects/Agentic_RAG/.chroma
-    
-    
-    python main.py ask "your question"     # query the baseline RAG
+Layer 2 requires TAVILY_API_KEY in .env (web-search fallback) in addition to
+OPENAI_API_KEY. The graph now grades its own retrieval: watch the ---
+GRADE/TRANSFORM/WEB SEARCH --- lines to see the corrective loop fire.
 """
 import sys
 
@@ -15,17 +15,22 @@ from src.graph import graph
 
 
 def run_query(question: str):
-    result = graph.invoke({"question": question})
+    # loop_count starts at 0; grade/transform/web_search manage it from there.
+    result = graph.invoke({"question": question, "loop_count": 0})
+
+    if result["question"] != question:
+        print(f"\n(question was rewritten to: {result['question']!r})")
 
     print("\n=== ANSWER ===\n")
     print(result["generation"])
 
-    print("\n=== SOURCES (retrieved chunks) ===\n")
+    print("\n=== SOURCES (context handed to the generator) ===\n")
     for i, d in enumerate(result["documents"], start=1):
         src = d.metadata.get("source", "unknown")
         page = d.metadata.get("page")
         loc = src + (f", p.{page}" if page is not None else "")
-        print(f"[{i}] {loc}")
+        tag = " [web]" if d.metadata.get("web") else ""
+        print(f"[{i}] {loc}{tag}")
 
 
 def main():

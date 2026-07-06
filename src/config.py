@@ -25,3 +25,8 @@ DENSE_K = 8      # candidates pulled from the vector store
 SPARSE_K = 8     # candidates pulled from BM25
 RRF_K = 60       # Reciprocal Rank Fusion constant (standard default)
 TOP_K = 5        # final chunks handed to the generator
+
+# --- Layer 2: CRAG (corrective retrieval) ---
+MIN_RELEVANT_DOCS = 2    # fewer surviving chunks than this => retrieval is "weak"
+MAX_RETRIEVAL_LOOPS = 2  # max transform_query -> retrieve cycles before web fallback
+WEB_SEARCH_K = 3         # Tavily results appended when we fall back to the web
