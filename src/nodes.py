@@ -9,6 +9,7 @@ Layer 2 (CRAG):     grade_documents, transform_query, web_search, plus the
                     agentic here: it inspects its own retrieval and corrects it.
 """
 from typing import List, Literal
+import importlib
 
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -30,8 +31,7 @@ def _get_llm() -> ChatOpenAI:
 
 
 def _get_tavily():
-    """Lazy Tavily client (needs TAVILY_API_KEY in .env). Imported lazily so
-    Layer-1-only usage never requires the package or the key."""
+    
     global _tavily
     if _tavily is None:
         from tavily import TavilyClient  # tavily-python
@@ -178,13 +178,7 @@ def transform_query(state: GraphState) -> GraphState:
 def web_search(state: GraphState) -> GraphState:
     """CRAG step 2b: last-resort fallback — search the web via Tavily.
 
-    Reached only after the re-retrieval loop is exhausted and the corpus still
-    can't support the question. Results are converted to ``Document`` objects
-    (metadata['source'] = the URL, metadata['web'] = True) and appended to
-    whatever relevant chunks survived grading, so citations keep working and
-    web-sourced context is distinguishable downstream.
-
-    NOTE (Layer 4): the human-approval `interrupt` gate will be inserted
+   # NOTE (Layer 4): the human-approval `interrupt` gate will be inserted
     immediately before this node. At Layer 2 it runs ungated.
     """
     question = state["question"]
