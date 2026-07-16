@@ -30,3 +30,7 @@ TOP_K = 5        # final chunks handed to the generator
 MIN_RELEVANT_DOCS = 2    # fewer surviving chunks than this => retrieval is "weak"
 MAX_RETRIEVAL_LOOPS = 2  # max transform_query -> retrieve cycles before web fallback
 WEB_SEARCH_K = 3         # Tavily results appended when we fall back to the web
+
+# --- Layer 3: Self-RAG (answer self-correction) ---
+MAX_GENERATION_LOOPS = 2  # max regenerations when the answer isn't grounded (hallucination)
+                          # before we stop and return the best-effort answer

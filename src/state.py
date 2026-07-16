@@ -15,5 +15,11 @@ class GraphState(TypedDict, total=False):
     documents: List[Document]  # retrieved / filtered chunks
     generation: str          # the answer
     web_search: bool         # Layer 2 (CRAG): set by the document grader
-    loop_count: int          # Layer 2/3: caps the corrective loops
+    loop_count: int          # Layer 2/3: caps the transform_query -> retrieve cycle
+
+    # --- Layer 3 (Self-RAG): answer self-correction ---
+    generate_count: int      # caps the regenerate loop on hallucinated answers
+    answer_grounded: bool    # grade_answer verdict: is the answer supported by the docs?
+    answer_useful: bool      # grade_answer verdict: does the answer address the question?
+
     messages: list           # Layer 4: multi-turn memory
