@@ -14,31 +14,43 @@ a FastAPI + Docker deployment.
 | Layer                                                                   | Tag                | Status                    |
 | ----------------------------------------------------------------------- | ------------------ | ------------------------- |
 | 1 — Baseline RAG (hybrid retrieve → generate w/ citations)              | `v0.1-baseline`    | **done**                  |
-| 2 — CRAG (grade docs, conditional routing, transform_query, web_search) | `v0.2-crag`        | **built — runnable**      |
-| 3 — Self-RAG (grade answer, regenerate/re-retrieve)                     | `v0.3-self-rag`    | not started               |
+| 2 — CRAG (grade docs, conditional routing, transform_query, web_search) | `v0.2-crag`        | **done — verified live**  |
+| 3 — Self-RAG (grade answer, regenerate/re-retrieve)                     | `v0.3-self-rag`    | **done — verified live**  |
 | 4 — Memory + HITL (checkpointer + one interrupt gate)                   | `v0.4-memory-hitl` | not started               |
 | 5 — Productionize (FastAPI, Docker, eval, LangSmith)                    | `v1.0`             | not started               |
 
-_(Per-layer eval comparison table goes here once the harness runs — that's the headline.)_
+Verification traces for each layer (real runs showing every router branch firing,
+including a fault-injection test of the hallucination grader) live in
+[`output documentation/`](<output documentation/>).
 
-## Architecture (Layer 2 — CRAG)
+_(Per-layer eval comparison table goes here once the RAGAS harness runs — that's
+the headline.)_
 
-```
-question ──> retrieve (dense + BM25 + RRF) ──> grade_documents
-                  ^                                  │
-                  │            ┌─────────────────────┼─────────────────────┐
-                  │            │ sufficient          │ weak, loops left    │ weak, loops exhausted
-                  │            v                     v                     v
-                  │         generate          transform_query          web_search (Tavily)
-                  │            │                     │                     │
-                  │           END                    │                  generate ──> END
-                  └──────────────────────────────────┘
-```
+## Architecture (Layer 3 — CRAG + Self-RAG)
 
-The graph grades every retrieved chunk (structured-output LLM grader), keeps the
-relevant ones, and — if too few survive — rewrites the query and re-retrieves
-(capped at `MAX_RETRIEVAL_LOOPS` cycles), then falls back to a Tavily web search
-as a last resort. Web-sourced chunks are tagged `[web]` in the output.
+![Compiled LangGraph graph](graph.png)
+
+Two self-correction loops, one on each side of generation:
+
+**CRAG — grade the retrieval (input side).** Every retrieved chunk is graded for
+relevance by a structured-output LLM grader; only relevant chunks survive. If too
+few survive, the graph rewrites the query and re-retrieves (capped at
+`MAX_RETRIEVAL_LOOPS` cycles), then falls back to a Tavily web search as a last
+resort. Web-sourced chunks are tagged `[web]` in the output.
+
+**Self-RAG — grade the answer (output side).** No answer leaves the graph
+unchecked. A hallucination grader verifies every claim is grounded in the
+retrieved chunks; an answer grader then verifies it actually addresses the
+question. Each failure routes to the stage that caused it: hallucination →
+regenerate (capped at `MAX_GENERATION_LOOPS`); grounded-but-off-topic →
+rewrite the query and re-retrieve (shared rewrite budget). An honest
+"I don't know" from the generator is recognized and accepted, not looped on.
+When a correction budget runs out, the best-effort answer is returned and
+explicitly labeled unverified (`SELF-CHECK: best effort`) — the system fails
+honestly instead of spinning or overclaiming.
+
+Regenerate the diagram anytime with `python view_graph.py` (prints Mermaid
+source and writes `graph.png`).
 
 ## Quickstart
 
@@ -59,17 +71,24 @@ python main.py ingest
 python main.py ask "What problem does Reciprocal Rank Fusion solve?"
 ```
 
+Watch the trace lines to see the graph make decisions:
+`--- GRADE: 4/5 chunks relevant ---`, `--- TRANSFORM (loop 1): ... ---`,
+`--- GRADE ANSWER: grounded=yes, addresses-question=yes -> accept ---`, and the
+final `=== SELF-CHECK ===` verdict on every answer.
+
 ## Layout
 
 ```
 src/
-  config.py      # all tunables (models, paths, chunking, retrieval k's)
+  config.py      # all tunables (models, paths, chunking, retrieval k's, loop budgets)
   state.py       # the shared GraphState TypedDict
   ingestion.py   # load + chunk + persist Chroma
   retrieval.py   # dense + BM25 + RRF fusion
-  nodes.py       # retrieve, generate, grade_documents, transform_query, web_search + router
+  nodes.py       # retrieve, generate + CRAG nodes + Self-RAG grade_answer + both routers
   graph.py       # the LangGraph StateGraph wiring
 main.py          # CLI: ingest / ask
+view_graph.py    # render the compiled graph (Mermaid + graph.png)
+output documentation/  # per-layer verification traces (the evidence behind each tag)
 eval/            # golden Q&A set + RAGAS harness (planned)
 data/            # corpus (git-ignored)
 ```
