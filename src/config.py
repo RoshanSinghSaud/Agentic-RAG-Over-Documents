@@ -16,6 +16,8 @@ DATA_DIR = ROOT / "data"
 CHROMA_DIR = ROOT / ".chroma"
 COLLECTION_NAME = "agentic_rag"
 
+CHECKPOINT_DB=ROOT / "checkpoint.db"
+
 # --- Chunking ---
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
@@ -24,7 +26,7 @@ CHUNK_OVERLAP = 150
 DENSE_K = 8      # candidates pulled from the vector store
 SPARSE_K = 8     # candidates pulled from BM25
 RRF_K = 60       # Reciprocal Rank Fusion constant (standard default)
-TOP_K = 5        # final chunks handed to the generator
+TOP_K = 6       # final chunks handed to the generator
 
 # --- Layer 2: CRAG (corrective retrieval) ---
 MIN_RELEVANT_DOCS = 2    # fewer surviving chunks than this => retrieval is "weak"

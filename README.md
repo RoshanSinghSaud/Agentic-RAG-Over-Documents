@@ -6,7 +6,7 @@ layer by layer into a graph that grades its own retrieval (**CRAG**) and its own
 answers (**Self-RAG**), with memory, a human-approval gate before web search, and
 a FastAPI + Docker deployment.
 
- This README tracks build
+> Full design lives in `CLAUDE.md` (the project brief). This README tracks build
 > status and how to run it.
 
 ## Build status

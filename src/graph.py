@@ -1,34 +1,24 @@
-"""Layer 3: the Self-RAG graph — answers that grade and correct themselves.
-
-Layer 2 (CRAG) made the graph inspect its own *retrieval*. Layer 3 closes the
-second loop: after generating, the graph inspects its own *answer* and routes
-on the verdict instead of blindly returning it.
+"""The agentic-RAG graph: retrieve -> generate with two self-correction loops
+(CRAG on retrieval, Self-RAG on the answer), multi-turn memory via a
+checkpointer, and one human approval gate before the web fallback.
 
     START -> retrieve -> grade_documents
                              |
-        +--------------------+----------------------+
-        | sufficient         | weak, loops left     | weak, loops exhausted
-        v                    v                      v
-     generate         transform_query           web_search
-        |                    |                      |
-        v               (back to retrieve)          v
-   grade_answer  <----------------------------- generate
-        |
-        +-- grounded & useful ------------------> END
-        +-- hallucinated (budget left) ---------> generate      (regenerate)
-        +-- off-topic    (budget left) ---------> transform_query -> retrieve
-        +-- any budget exhausted ---------------> END (best-effort answer)
+       sufficient ---------> generate
+       weak, loops left ---> transform_query -> retrieve      (rewrite cycle)
+       weak, loops done ---> human_approval_gate
+                                 approved -> web_search -> generate
+                                 denied   -> generate    (best effort, no web)
 
-New LangGraph concept vs Layer 2: *conditional routing on the model's own
-output*. The Layer 2 router branched on retrieval quality (input side); the
-Self-RAG router branches on generation quality (output side). Same primitive —
-`add_conditional_edges` — pointed at a different stage of the pipeline, which
-is what turns RAG into a closed feedback loop.
+    generate -> grade_answer
+                    grounded & useful ----------> finalize -> END
+                    hallucinated (budget left) -> generate    (regenerate)
+                    off-topic    (budget left) -> transform_query -> retrieve
+                    any budget exhausted -------> finalize -> END (best effort)
 
-Both corrective cycles stay capped:
-  * regenerate loop  — `generate_count` vs config.MAX_GENERATION_LOOPS
-  * re-retrieve loop — `loop_count`     vs config.MAX_RETRIEVAL_LOOPS (shared
-    with CRAG, so total query rewrites are budgeted in one place)
+Loop budgets: query rewrites are capped by config.MAX_RETRIEVAL_LOOPS
+(`loop_count`, shared by the CRAG and Self-RAG paths so all rewrites draw on
+one budget); regenerations by config.MAX_GENERATION_LOOPS (`generate_count`).
 """
 from langgraph.graph import END, START, StateGraph
 
@@ -36,7 +26,7 @@ from . import nodes
 from .state import GraphState
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     g = StateGraph(GraphState)
 
     # --- nodes ---
@@ -46,6 +36,8 @@ def build_graph():
     g.add_node("web_search", nodes.web_search)             # CRAG: web fallback
     g.add_node("generate", nodes.generate)
     g.add_node("grade_answer", nodes.grade_answer)         # Self-RAG: grade the answer
+    g.add_node("finalize", nodes.finalize)                 # Layer 4: answer -> history
+    g.add_node("human_approval_gate", nodes.human_approval_gate)  # Layer 4: HITL
 
     # --- edges ---
     g.add_edge(START, "retrieve")
@@ -58,7 +50,20 @@ def build_graph():
         {
             "generate": "generate",
             "transform_query": "transform_query",
+            "web_search": "human_approval_gate",  # Layer 4: gate before web_search
+        },
+    )
+
+    # Layer 4: the one HITL interrupt, gating the highest-stakes action.
+    # decide_after_grading stays unchanged — it only ever inspects
+    # document-grading verdicts. What happens after approval is a separate
+    # concern, routed by its own router.
+    g.add_conditional_edges(
+        "human_approval_gate",
+        nodes.decide_after_approval,
+        {
             "web_search": "web_search",
+            "generate": "generate",  # denied -> best-effort with existing docs
         },
     )
 
@@ -69,18 +74,24 @@ def build_graph():
     g.add_edge("generate", "grade_answer")
 
     # The Self-RAG router: accept, regenerate, or rewrite-and-re-retrieve.
+    # Every terminal verdict routes through `finalize`, which appends the
+    # accepted answer to the thread's message history before END — inside the
+    # graph, so the history write shares the turn's checkpoint.
     g.add_conditional_edges(
         "grade_answer",
         nodes.decide_after_answer,
         {
-            "end": END,
-            "generate": "generate",              # hallucination -> regenerate
+            "end": "finalize",
+            "generate": "generate",                # hallucination -> regenerate
             "transform_query": "transform_query",  # off-topic -> better retrieval
         },
     )
+    g.add_edge("finalize", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
-# Compiled graph importable as `from src.graph import graph`
+# Checkpointer-less compile for import-time uses (e.g. view_graph.py rendering
+# graph.png). main.py builds its own instance with a SqliteSaver — interrupt()
+# only works through that one.
 graph = build_graph()

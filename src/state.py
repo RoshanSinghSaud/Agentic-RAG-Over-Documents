@@ -5,9 +5,10 @@ fields are declared now (with total=False so they're optional) to keep the
 state forward-compatible with later layers — no refactor needed when you add
 CRAG, Self-RAG, and memory.
 """
-from typing import List, TypedDict
+from typing import List, TypedDict, Annotated
 
 from langchain_core.documents import Document
+from langgraph.graph.message import add_messages
 
 
 class GraphState(TypedDict, total=False):
@@ -22,4 +23,6 @@ class GraphState(TypedDict, total=False):
     answer_grounded: bool    # grade_answer verdict: is the answer supported by the docs?
     answer_useful: bool      # grade_answer verdict: does the answer address the question?
 
-    messages: list           # Layer 4: multi-turn memory
+    messages: Annotated[list,add_messages]           # Layer 4: multi-turn memory
+
+    web_search_approved: bool # HITL

@@ -8,10 +8,15 @@ venv/
 env/
 .env
 .chroma/
+
 .ipynb_checkpoints/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+
+# Layer 4: Memory 
+checkpoint.db* 
+
 
 # Virtualenv lives in the project root under this name (see README quickstart:
 # `python -m venv agentic-rag`). Never commit it — it's thousands of library files.

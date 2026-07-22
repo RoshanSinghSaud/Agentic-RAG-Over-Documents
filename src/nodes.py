@@ -1,27 +1,23 @@
-"""LangGraph nodes for Layers 1-3.
+"""LangGraph nodes. Each node is a plain function: it receives the graph state
+and returns a dict of the keys it wants to update; the ``decide_*`` functions
+are the conditional-edge routers.
 
-Each node is a plain function: it receives the graph state and returns a dict of
-the keys it wants to update. LangGraph merges that dict back into the state.
-
-Layer 1 (baseline): retrieve -> generate.
-Layer 2 (CRAG):     grade_documents, transform_query, web_search, plus the
-                    routing function `decide_after_grading`. The graph becomes
-                    agentic here: it inspects its own retrieval and corrects it.
-Layer 3 (Self-RAG): grade_answer (grounded? on-topic?) plus the routing function
-                    `decide_after_answer`. Now the graph also inspects its own
-                    *answer* and corrects it: regenerate on hallucination, or
-                    rewrite-and-re-retrieve when the answer is off-topic.
+Layer map: retrieve/generate (L1) - document grading, query rewrite, web
+fallback (L2, CRAG) - answer grading (L3, Self-RAG) - finalize and the human
+approval gate (L4, memory + HITL).
 """
 from typing import List, Literal
-import importlib
 
 from langchain_core.documents import Document
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from . import config, retrieval
 from .state import GraphState
+
+from langgraph.types import interrupt
 
 _llm = None
 _tavily = None
@@ -35,7 +31,6 @@ def _get_llm() -> ChatOpenAI:
 
 
 def _get_tavily():
-
     global _tavily
     if _tavily is None:
         from tavily import TavilyClient  # tavily-python
@@ -59,12 +54,26 @@ GENERATE_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a precise question-answering assistant. Answer ONLY from the "
-            "numbered context below. After each claim, cite the supporting source(s) "
-            "inline like [1] or [1][3]. If the context does not contain the answer, "
-            'reply exactly: "' + ABSTENTION + '" Do not use outside knowledge.\n\n'
+            "You are a precise question-answering assistant with two distinct "
+            "sources: (1) a numbered context of chunks retrieved from a document "
+            "corpus, and (2) the conversation history with this user. First decide "
+            "what kind of question this is:\n"
+            "- About the DOCUMENT CORPUS / subject matter -> answer ONLY from the "
+            "numbered context below, citing source(s) inline like [1] or [1][3] for "
+            "every claim. Ignore the conversation history for this kind of question.\n"
+            "- About the CONVERSATION ITSELF (e.g. what was asked or said earlier) "
+            "-> answer from the conversation history instead, with no citation "
+            "needed. The numbered context is very likely irrelevant noise for this "
+            "kind of question (a failed document search) — ignore it even if it is "
+            "present.\n"
+            "If the relevant source (context for corpus questions, history for "
+            "conversation questions) does not contain the answer, reply exactly: "
+            '"' + ABSTENTION + '" '
+            "Do not use outside knowledge beyond the context and the conversation "
+            "history.\n\n"
             "Context:\n{context}",
         ),
+        MessagesPlaceholder(variable_name="history"),
         ("human", "{question}"),
     ]
 )
@@ -81,6 +90,19 @@ def _format_context(documents) -> str:
     return "\n\n".join(blocks)
 
 
+def _format_history(messages) -> str:
+    """Render prior turns as plain text for prompts that can't take BaseMessage
+    objects directly (e.g. the grader prompts, which use a string human template
+    rather than a MessagesPlaceholder)."""
+    if not messages:
+        return "(no prior conversation)"
+    lines = []
+    for m in messages:
+        role = "User" if m.type == "human" else "Assistant"
+        lines.append(f"{role}: {m.content}")
+    return "\n".join(lines)
+
+
 def retrieve(state: GraphState) -> GraphState:
     """Hybrid-retrieve chunks for the current (possibly rewritten) question."""
     docs = retrieval.hybrid_retrieve(state["question"])
@@ -90,9 +112,14 @@ def retrieve(state: GraphState) -> GraphState:
 def generate(state: GraphState) -> GraphState:
     """Generate an answer grounded in the retrieved chunks, with inline citations."""
     context = _format_context(state["documents"])
+    # Include the full message list, even this turn's own question: {question}
+    # below is state["question"], which CRAG's transform_query may have rewritten
+    # for retrieval — the raw, originally-phrased question (the one that actually
+    # signals "this is about our conversation") only survives in the last message.
+    history = state.get("messages", [])
     chain = GENERATE_PROMPT | _get_llm()
     answer = chain.invoke(
-        {"context": context, "question": state["question"]}
+        {"context": context, "question": state["question"], "history": history}
     ).content
     return {"generation": answer}
 
@@ -149,13 +176,11 @@ def grade_documents(state: GraphState) -> GraphState:
     """CRAG step 1: LLM-grade every retrieved chunk for relevance.
 
     Keeps only the chunks graded 'yes'. If fewer than
-    ``config.MIN_RELEVANT_DOCS`` survive, retrieval is considered weak and the
-    ``web_search`` flag is raised — the router then decides whether to rewrite
-    the query and re-retrieve, or fall back to the web.
+    ``config.MIN_RELEVANT_DOCS`` survive, the ``web_search`` flag is raised and
+    the router decides between a query rewrite and the web fallback.
 
-    Grading is batched (one LLM call per chunk, dispatched concurrently via
-    ``.batch``) and uses structured output, so a verdict is always a clean
-    'yes'/'no' rather than free text we'd have to parse.
+    Grading is batched (one call per chunk via ``.batch``) with structured
+    output, so a verdict is always a clean 'yes'/'no'.
     """
     question = state["question"]
     docs = state["documents"]
@@ -178,10 +203,9 @@ def grade_documents(state: GraphState) -> GraphState:
 def transform_query(state: GraphState) -> GraphState:
     """CRAG step 2a: rewrite the question for better retrieval.
 
-    Also increments ``loop_count`` — this is the counter that caps the
-    re-retrieval cycle so the graph can't spin forever. Both the CRAG path
-    (weak retrieval) and the Self-RAG path (off-topic answer) route through
-    here, so this one counter budgets all query rewrites.
+    Also increments ``loop_count``. Both the CRAG path (weak retrieval) and the
+    Self-RAG path (off-topic answer) route through here, so this one counter
+    budgets all query rewrites.
     """
     chain = TRANSFORM_PROMPT | _get_llm()
     better = chain.invoke({"question": state["question"]}).content.strip()
@@ -193,8 +217,9 @@ def transform_query(state: GraphState) -> GraphState:
 def web_search(state: GraphState) -> GraphState:
     """CRAG step 2b: last-resort fallback — search the web via Tavily.
 
-   # NOTE (Layer 4): the human-approval `interrupt` gate will be inserted
-    immediately before this node. At Layer 2 it runs ungated.
+    Gated by ``human_approval_gate`` (Layer 4): this node only runs after an
+    explicit human approval, since it's the one action that reaches outside
+    the document corpus.
     """
     question = state["question"]
     print(f"--- WEB SEARCH (Tavily): {question} ---")
@@ -213,14 +238,10 @@ def web_search(state: GraphState) -> GraphState:
 def decide_after_grading(state: GraphState) -> str:
     """Conditional edge after ``grade_documents`` — the CRAG router.
 
-    Returns the name of the next node:
-
     - ``"generate"``        — enough relevant chunks survived grading.
-    - ``"transform_query"`` — retrieval was weak and we still have loop budget:
-                              rewrite the query and re-retrieve (the cycle).
-    - ``"web_search"``      — retrieval was weak and the loop cap
-                              (``config.MAX_RETRIEVAL_LOOPS``) is exhausted:
-                              fall back to the web, then generate.
+    - ``"transform_query"`` — weak retrieval, rewrite budget left: re-retrieve.
+    - ``"web_search"``      — weak retrieval, budget exhausted: web fallback
+                              (the graph maps this verdict to the approval gate).
     """
     if not state.get("web_search", False):
         return "generate"
@@ -233,20 +254,12 @@ def decide_after_grading(state: GraphState) -> str:
 # Layer 3 — Self-RAG: grade_answer + routing
 # =========================================================================
 #
-# CRAG asked "are the *documents* good?". Self-RAG asks "is the *answer* good?"
-# along two independent axes, each a small structured-output LLM call:
-#
-#   1. Grounding / faithfulness — is every claim in the answer supported by the
-#      retrieved documents, or did the model hallucinate? (Self-RAG "ISSUP")
-#   2. Usefulness / relevance   — does the answer actually address the question,
-#      or is it well-grounded but beside the point? (Self-RAG "ISUSE")
-#
-# The router `decide_after_answer` turns those two booleans into a decision:
-#   grounded & useful     -> END (accept)
-#   NOT grounded          -> regenerate (same context, try again) — capped by
-#                            config.MAX_GENERATION_LOOPS
-#   grounded but off-topic -> transform_query -> retrieve (get better context) —
-#                            capped by config.MAX_RETRIEVAL_LOOPS (shared counter)
+# Two independent verdicts on the generated answer, each a structured-output
+# call: grounding (Self-RAG "ISSUP" — supported by docs/history?) and
+# usefulness (Self-RAG "ISUSE" — addresses the question?).
+# `decide_after_answer` routes on the pair: accept, regenerate (capped by
+# MAX_GENERATION_LOOPS), or rewrite-and-re-retrieve (capped by the shared
+# MAX_RETRIEVAL_LOOPS budget).
 
 
 class GradeHallucination(BaseModel):
@@ -274,14 +287,18 @@ HALLUCINATION_PROMPT = ChatPromptTemplate.from_messages(
         (
             "system",
             "You are a grader assessing whether an LLM answer is grounded in / "
-            "supported by a set of retrieved facts. Ignore inline citation markers "
-            "like [1]. Grade 'yes' if every substantive claim is supported by the "
-            "facts; grade 'no' if the answer asserts anything not present in the "
-            "facts. Judge only grounding, not whether the answer is a good reply.",
+            "supported by a set of retrieved facts, OR by the conversation history "
+            "below (an answer about what was discussed earlier is grounded if it "
+            "accurately reflects that history). Ignore inline citation markers like "
+            "[1]. Grade 'yes' if every substantive claim is supported by the facts "
+            "or the history; grade 'no' if the answer asserts anything not present "
+            "in either. Judge only grounding, not whether the answer is a good "
+            "reply.",
         ),
         (
             "human",
-            "Set of facts:\n\n{documents}\n\nLLM answer:\n\n{generation}",
+            "Set of facts:\n\n{documents}\n\nConversation history:\n\n{history}\n\n"
+            "LLM answer:\n\n{generation}",
         ),
     ]
 )
@@ -306,13 +323,11 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages(
 def grade_answer(state: GraphState) -> GraphState:
     """Self-RAG: grade the generated answer for grounding, then usefulness.
 
-    Two cheap structured-output calls:
-      * hallucination grader -> ``answer_grounded``
-      * answer grader        -> ``answer_useful`` (only run if grounded; there's
-        no point asking "is this on-topic?" about a hallucinated answer)
+    The usefulness grader only runs if the answer is grounded — there's no
+    point asking "is this on-topic?" about a hallucinated answer.
 
-    An honest abstention (the model correctly reported the corpus can't answer)
-    short-circuits to accepted — looping on it would only waste calls.
+    An honest abstention short-circuits to accepted: looping on a correct
+    "I don't know" would only waste calls.
 
     When the answer is NOT grounded we bump ``generate_count`` here (rather than
     in ``generate``), so the counter measures *hallucination retries* specifically
@@ -327,12 +342,15 @@ def grade_answer(state: GraphState) -> GraphState:
         return {"answer_grounded": True, "answer_useful": True}
 
     facts = _format_context(state["documents"])
+    history_text = _format_history(state.get("messages", []))
 
     hallu_grader = HALLUCINATION_PROMPT | _get_llm().with_structured_output(
         GradeHallucination
     )
     grounded = (
-        hallu_grader.invoke({"documents": facts, "generation": generation}).binary_score
+        hallu_grader.invoke(
+            {"documents": facts, "history": history_text, "generation": generation}
+        ).binary_score
         == "yes"
     )
 
@@ -357,17 +375,11 @@ def grade_answer(state: GraphState) -> GraphState:
 def decide_after_answer(state: GraphState) -> str:
     """Conditional edge after ``grade_answer`` — the Self-RAG router.
 
-    Returns the name of the next step:
-
-    - ``"end"``             — answer is grounded AND addresses the question
-                              (accept), OR a corrective budget is exhausted so we
-                              return the best-effort answer instead of spinning.
-    - ``"generate"``        — answer hallucinated and we still have generation
-                              budget (``config.MAX_GENERATION_LOOPS``): regenerate
-                              from the same context.
-    - ``"transform_query"`` — answer is grounded but off-topic and we still have
-                              rewrite budget (``config.MAX_RETRIEVAL_LOOPS``):
-                              rewrite the question and re-retrieve better context.
+    - ``"end"``             — grounded AND useful (accept), OR a corrective
+                              budget is exhausted (best effort beats spinning).
+    - ``"generate"``        — hallucinated, generation budget left: regenerate.
+    - ``"transform_query"`` — grounded but off-topic, rewrite budget left:
+                              re-retrieve better context.
     """
     grounded = state.get("answer_grounded", True)
     useful = state.get("answer_useful", True)
@@ -386,3 +398,72 @@ def decide_after_answer(state: GraphState) -> str:
         return "transform_query"
     print("--- SELF-RAG: rewrite budget exhausted -> accept best effort ---")
     return "end"
+
+
+# =========================================================================
+# Layer 4 — memory: finalize
+# =========================================================================
+
+
+def finalize(state: GraphState) -> GraphState:
+    """Terminal node: append the accepted answer to the conversation history.
+
+    This lives *inside* the graph (routed to by ``decide_after_answer``'s
+    ``"end"`` verdict) rather than as a ``graph.update_state`` call in main.py,
+    for two reasons:
+
+    1. Atomicity — the AI turn lands in the same checkpoint as the rest of the
+       turn, so a crash between "answer produced" and "history updated" can't
+       leave the thread's memory missing its own reply.
+    2. ``update_state`` with no ``as_node`` attributes the write to the last
+       node that ran and then re-evaluates that node's conditional edges to
+       plan the next step — which called ``decide_after_answer`` a second time
+       per turn (the doubled "budget exhausted" print).
+    """
+    return {"messages": [AIMessage(content=state["generation"])]}
+
+
+# =========================================================================
+# Layer 4 — HITL: the one approval gate, placed before web_search
+# =========================================================================
+
+
+def human_approval_gate(state: GraphState) -> GraphState:
+    """Pause before the web-search fallback — the highest-stakes action, since
+    it's the only point where the graph reaches outside the document corpus.
+
+    Surfaces the pending query and blocks via ``interrupt()`` until the caller
+    resumes the run with ``Command(resume=...)``. Requires a checkpointer
+    (main.py's ``build_graph(checkpointer=saver)``) — without one, `interrupt`
+    has nowhere to save the paused state and will raise.
+
+    On resume the node re-runs from the top, so nothing above the
+    ``interrupt()`` call may have side effects. Normalization of the human's
+    reply happens here and only here — one comparison site, and anything
+    unrecognized fails closed (denied).
+    """
+    decision = interrupt(
+        {
+            "reason": "Retrieved documents were insufficient; the graph wants "
+                      "to fall back to a web search.",
+            "question": state["question"],
+            "instruction": "Approve this web search? (y/n)",
+        }
+    )
+    approved = str(decision).strip().lower() in ("y", "yes", "true")
+    print(f"--- HITL: web search {'approved' if approved else 'denied'} ---")
+    return {"web_search_approved": approved}
+
+
+def decide_after_approval(state: GraphState) -> str:
+    """Conditional edge after ``human_approval_gate``.
+
+    - ``"web_search"`` — approved: proceed to the Tavily fallback.
+    - ``"generate"``   — denied: answer from whatever (possibly weak) documents
+                         survived grading rather than dead-ending the turn; the
+                         generate prompt's abstention rule keeps this honest.
+    """
+    if state.get("web_search_approved", False):
+        return "web_search"
+    print("--- HITL: denied -> generating best-effort answer without web search ---")
+    return "generate"
