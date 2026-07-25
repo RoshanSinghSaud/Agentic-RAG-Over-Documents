@@ -35,12 +35,6 @@ context precision/recall). The HITL gate is auto-declined during eval;
 `--approve-web` flips it. How-to and schema: [`eval/README.md`](eval/README.md);
 the full story of the first runs: [`output documentation/layer5_eval_explained.md`](<output documentation/layer5_eval_explained.md>).
 
-> **Scope note.** An earlier draft promised a per-layer table (v0.1 vs v0.2 vs
-> v0.3) by checking out old tags and re-running the harness. Descoped: the old
-> graphs don't share today's state shape or interrupt interface, so that table
-> would measure adapter code, not the layers. Instead the table below tracks the
-> shipped system *forward* — every row is a real, committed change, measured on
-> the same 20 questions.
 
 **The eval paid for itself on day one — it caught a silent data bug.** The
 baseline run scored multi-hop questions 1/4 with suspiciously thin context.
