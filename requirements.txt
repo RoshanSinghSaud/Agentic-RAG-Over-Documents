@@ -14,9 +14,15 @@ python-dotenv>=1.0.0
 # --- Layer 2 (CRAG) ---
 tavily-python>=0.5.0          # web-search fallback
 
+# --- Layer 5: eval harness ---
+# ragas <=0.4.3 crashes on import next to langchain-community 0.4.x (it imports
+# the removed vertexai module); eval/run_eval.py injects a small shim before
+# importing ragas. Pinned so a future ragas release doesn't silently change
+# metric definitions under the README's numbers. `datasets` comes in as a
+# ragas dependency.
+ragas==0.4.3
+
 # --- Added in later layers (install when you reach them) ---
 # langsmith>=0.1.0            # Layer 5: observability/tracing
 # fastapi>=0.110.0            # Layer 5: serving
 # uvicorn>=0.29.0            # Layer 5: serving
-# ragas>=0.2.0               # Eval harness (RAGAS)
-# datasets>=2.0.0            # RAGAS dependency

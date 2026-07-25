@@ -17,14 +17,61 @@ a FastAPI + Docker deployment.
 | 2 — CRAG (grade docs, conditional routing, transform_query, web_search) | `v0.2-crag`        | **done — verified live**  |
 | 3 — Self-RAG (grade answer, regenerate/re-retrieve)                     | `v0.3-self-rag`    | **done — verified live**  |
 | 4 — Memory + HITL (checkpointer + one interrupt gate)                   | `v0.4-memory-hitl` | **done — verified live**  |
-| 5 — Productionize (FastAPI, Docker, eval, LangSmith)                    | `v1.0`             | not started               |
+| 5 — Productionize (eval ✓, FastAPI, Docker, LangSmith)                  | `v1.0`             | **in progress** — eval harness built, baseline measured |
 
 Verification traces for each layer (real runs showing every router branch firing,
 including a fault-injection test of the hallucination grader) live in
 [`output documentation/`](<output documentation/>).
 
-_(Per-layer eval comparison table goes here once the RAGAS harness runs — that's
-the headline.)_
+## Evaluation
+
+One harness (`eval/run_eval.py`), one hand-written golden set
+(`eval/golden_set.json`: 20 questions in five categories — `lookup`,
+`multi_hop`, `no_answer`, `needs_web`, `known_failure` — each category built to
+force one branch of the graph). Scoring is two-layer: **deterministic behavior
+checks** (did it abstain / escalate to the approval gate / retrieve the expected
+papers?) and **RAGAS quality metrics** (answer correctness, faithfulness,
+context precision/recall). The HITL gate is auto-declined during eval;
+`--approve-web` flips it. How-to and schema: [`eval/README.md`](eval/README.md);
+the full story of the first runs: [`output documentation/layer5_eval_explained.md`](<output documentation/layer5_eval_explained.md>).
+
+> **Scope note.** An earlier draft promised a per-layer table (v0.1 vs v0.2 vs
+> v0.3) by checking out old tags and re-running the harness. Descoped: the old
+> graphs don't share today's state shape or interrupt interface, so that table
+> would measure adapter code, not the layers. Instead the table below tracks the
+> shipped system *forward* — every row is a real, committed change, measured on
+> the same 20 questions.
+
+**The eval paid for itself on day one — it caught a silent data bug.** The
+baseline run scored multi-hop questions 1/4 with suspiciously thin context.
+Tracing showed `hybrid_retrieve` returning ~2 chunks instead of `TOP_K=6`; the
+Chroma index turned out to hold 2,872 chunks — exactly **4 × 718**, because
+`ingest` had been run four times and `Chroma.from_documents` *appends*. RRF's
+dedup then collapsed the duplicate-heavy candidate lists, starving the
+generator of context. Fix: `ingest` made idempotent, index rebuilt.
+
+| run | behavior pass | context recall | context precision | faithfulness | answer correctness |
+|---|---|---|---|---|---|
+| `v0.4` (duplicated index) | 15/20 | 0.765 | 0.697 | 0.941 | 0.657 |
+| `v0.4-fixed` (clean index) | 15/20 | **0.856** | **0.759** | **0.972** | 0.633 |
+| `v0.5` (prompt fixes) | _queued_ | | | | |
+
+How to read it: the retrieval-side metrics moved exactly where a retrieval bug
+should move them (multi-hop context recall 0.556 → 0.722), while LLM-judged
+correctness shifts under 0.1 are judge noise, not signal. Behavior pass didn't
+move — the same five questions fail in both runs, which is the more interesting
+result: it isolates two **prompt-level** bugs from the **data-level** bug the
+fix removed. (1) *Comparative questions*: the document grader rejects
+single-paper chunks as irrelevant to a two-paper comparison — on "How does CRAG
+differ from HyDE?" it rejected 18/18 retrieved chunks across three attempts.
+(2) *Definitional over-abstention*: "How does HyDE retrieve documents…"
+answered "I don't know" while holding 6/6 relevant chunks. Both fixes are
+queued as the `v0.5` row.
+
+```bash
+python -m eval.run_eval --label v0.4 --skip-ragas   # fast behavior-only run
+python -m eval.run_eval --label v0.4                # full run incl. RAGAS scores
+```
 
 ## Architecture (Layer 4 — CRAG + Self-RAG + Memory + HITL)
 
@@ -106,14 +153,14 @@ final `=== SELF-CHECK ===` verdict on every answer.
 src/
   config.py      # all tunables (models, paths, chunking, retrieval k's, loop budgets)
   state.py       # the shared GraphState TypedDict
-  ingestion.py   # load + chunk + persist Chroma
+  ingestion.py   # load + chunk + persist Chroma (idempotent: resets the index first)
   retrieval.py   # dense + BM25 + RRF fusion
   nodes.py       # retrieve, generate, CRAG + Self-RAG graders, HITL gate, all routers
   graph.py       # the LangGraph StateGraph wiring (compiled with a checkpointer)
 main.py          # CLI: ingest / ask (interactive, thread-scoped, handles the HITL pause)
 view_graph.py    # render the compiled graph (Mermaid + graph.png)
 output documentation/  # per-layer verification traces (the evidence behind each tag)
-eval/            # golden Q&A set + RAGAS harness (planned)
+eval/            # golden Q&A set + harness + results (see eval/README.md)
 data/            # corpus (git-ignored)
 checkpoint.db    # SQLite conversation memory (git-ignored)
 ```

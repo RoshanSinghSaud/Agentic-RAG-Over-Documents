@@ -3,6 +3,7 @@
 Run once (or whenever the corpus changes):
     python main.py ingest
 """
+import shutil
 from pathlib import Path
 
 from langchain_chroma import Chroma
@@ -45,6 +46,7 @@ def build_vectorstore(chunks):
 
 
 def ingest():
+    shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
     raw = load_documents()
     if not raw:
         raise SystemExit(

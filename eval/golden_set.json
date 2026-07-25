@@ -1,0 +1,162 @@
+[
+  {
+    "id": "q01",
+    "category": "lookup",
+    "question": "What are the two sub-layers in each encoder layer of the Transformer?",
+    "ground_truth": "Each encoder layer has a multi-head self-attention mechanism and a position-wise fully connected feed-forward network.",
+    "expected_sources": ["attention-is-all-you-need"],
+    "notes": "Simple single-chunk lookup; baseline should already pass."
+  },
+  {
+    "id": "q02",
+    "category": "multi_hop",
+    "question": "How does CRAG's corrective action differ from Self-RAG's approach to handling poor retrieval?",
+    "ground_truth": "CRAG evaluates retrieved documents with a lightweight retrieval evaluator and triggers corrective actions such as knowledge refinement or web search when retrieval is poor, while Self-RAG trains the model to emit reflection tokens that decide whether retrieval is needed and critique its own retrieved passages and generations.",
+    "expected_sources": ["Corrective-RAG", "Self-RAG"],
+    "notes": "Requires chunks from two papers; tests RRF fusion quality."
+  },
+  {
+    "id": "q03",
+    "category": "no_answer",
+    "question": "What does the RAG paper say about GPT-4's performance?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "GPT-4 postdates the corpus. Adversarial: retrieval WILL surface topically-relevant RAG-paper chunks, but the specific claim does not exist. Correct behavior = abstention, not hallucination."
+  },
+  {
+    "id": "q04",
+    "category": "known_failure",
+    "question": "Who won the FIFA World Cup in 2022?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Layer 4 witnessed bug: answer grader ruled a correct web-sourced answer 'addresses-question=no' twice (2/2), likely parametric-knowledge skepticism about a post-cutoff event. Under auto-decline this should reach the gate and abstain cleanly; tracking that the loop doesn't spin."
+  },
+  {
+    "id": "q05",
+    "category": "known_failure",
+    "question": "What does RAG do?",
+    "ground_truth": "RAG combines a pretrained seq2seq language model with a non-parametric retriever over a dense vector index of Wikipedia, retrieving relevant passages at inference time so generation is grounded in external knowledge rather than only the model's parameters.",
+    "expected_sources": ["Retrieval-Augmented_Generation_RAG"],
+    "notes": "Near-duplicate of 'What is RAG?', the documented Layer 4 over-abstention bug (abstained despite 4/4 relevant chunks, also on the 'what does RAG worl?' typo variant). Tracking whether broad definitional questions abstain despite good retrieval."
+  },
+  {
+    "id": "q06",
+    "category": "multi_hop",
+    "question": "How does CRAG differ from HyDE?",
+    "ground_truth": "They intervene at different points: CRAG acts after retrieval, using a lightweight evaluator to grade retrieved documents and trigger corrective actions (knowledge refinement, web search, or both) when retrieval is poor, while HyDE acts before retrieval, using an LLM to generate a hypothetical document that answers the query and retrieving real documents whose embeddings are similar to it. CRAG corrects bad retrieval downstream; HyDE improves the retrieval query itself.",
+    "expected_sources": ["Corrective-RAG", "HyDE"],
+    "notes": "Requires chunks from two papers. HyDE.pdf confirmed present in corpus."
+  },
+  {
+    "id": "q07",
+    "category": "needs_web",
+    "question": "What is the capital of Nepal?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "General knowledge, fully outside the corpus, trivially web-answerable. Success under auto-decline = grader flags weak docs, question reaches the approval gate, then abstains gracefully. If approved: Kathmandu via [web] sources. Never a witnessed bug — pure needs_web routing test."
+  },
+  {
+    "id": "q08",
+    "category": "needs_web",
+    "question": "How does the YOLO model work?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Out of corpus (no vision papers) but web-answerable, so needs_web rather than no_answer: success = escalation to the approval gate, then clean abstention under auto-decline."
+  },
+  {
+    "id": "q09",
+    "category": "lookup",
+    "question": "How does Dense Passage Retrieval represent questions and passages for retrieval?",
+    "ground_truth": "DPR uses a dual-encoder framework: two independent BERT encoders map questions and passages into dense vectors, trained so that relevant question-passage pairs have high inner-product similarity, and retrieval is performed as maximum inner product search over the indexed passage vectors.",
+    "expected_sources": ["Dense Passage Retrieval"],
+    "notes": "Single-paper lookup; also covers a previously untested corpus paper."
+  },
+  {
+    "id": "q10",
+    "category": "lookup",
+    "question": "Where in the input context do language models perform worst when using retrieved documents?",
+    "ground_truth": "Performance is highest when relevant information appears at the beginning or end of the input context and degrades significantly when models must access relevant information in the middle of long contexts, producing a U-shaped performance curve.",
+    "expected_sources": ["Lost in the Middle"],
+    "notes": "Paraphrase-heavy lookup: question avoids the phrase 'lost in the middle' to stress dense-vs-BM25 retrieval rather than keyword match."
+  },
+  {
+    "id": "q11",
+    "category": "lookup",
+    "question": "What two capabilities does ReAct interleave, and why does combining them help?",
+    "ground_truth": "ReAct prompts LLMs to generate interleaved reasoning traces and task-specific actions: reasoning helps the model induce, track, and update action plans, while actions let it interface with external sources such as APIs or environments to gather additional information that feeds back into reasoning.",
+    "expected_sources": ["REAC T"],
+    "notes": "Covers a previously untested paper. NB the source PDF filename has an OCR-style space: 'REAC T- SYNERGIZING...' — the stem here matches that literal filename."
+  },
+  {
+    "id": "q12",
+    "category": "lookup",
+    "question": "How does HyDE retrieve relevant documents without any relevance labels?",
+    "ground_truth": "HyDE instructs an instruction-following LLM to generate a hypothetical document that answers the query, encodes that document with an unsupervised contrastively-trained encoder, and retrieves real corpus documents nearest to it in embedding vector space, grounding the hypothetical content in the actual corpus.",
+    "expected_sources": ["HyDE"],
+    "notes": "Single-paper lookup complement to the q06 multi_hop comparison."
+  },
+  {
+    "id": "q13",
+    "category": "lookup",
+    "question": "What are reflection tokens in Self-RAG?",
+    "ground_truth": "Reflection tokens are special tokens the Self-RAG model is trained to generate that let it decide whether retrieval is needed for a given input and critique its own output, judging things like whether retrieved passages are relevant and whether the generation is supported by them and useful.",
+    "expected_sources": ["Self-RAG"],
+    "notes": "Definitional lookup on a core mechanism; watch for the same over-abstention pattern as q05 since it is a broad 'what is X' question."
+  },
+  {
+    "id": "q14",
+    "category": "lookup",
+    "question": "What are the three judgments CRAG's retrieval evaluator can produce, and what action follows each?",
+    "ground_truth": "The retrieval evaluator classifies retrieval as Correct, Incorrect, or Ambiguous: Correct triggers knowledge refinement of the retrieved documents, Incorrect discards them and resorts to web search, and Ambiguous combines both strategies.",
+    "expected_sources": ["Corrective-RAG"],
+    "notes": "Multi-part lookup from one paper; tests whether one retrieved chunk carries the full taxonomy or fusion assembles it."
+  },
+  {
+    "id": "q15",
+    "category": "multi_hop",
+    "question": "What retriever does the RAG architecture build on, and how does that retriever represent passages?",
+    "ground_truth": "RAG uses DPR as its non-parametric retriever: a BERT-based dual encoder that produces dense vector representations of passages and queries, with relevant passages retrieved by maximum inner product search over a dense index of Wikipedia.",
+    "expected_sources": ["Retrieval-Augmented_Generation_RAG", "Dense Passage Retrieval"],
+    "notes": "Genuine cross-paper dependency: RAG cites DPR as its retriever. Answering the second half well requires DPR chunks, not just RAG chunks."
+  },
+  {
+    "id": "q16",
+    "category": "multi_hop",
+    "question": "Self-RAG and ReAct both let a language model control its own next step - compare their mechanisms.",
+    "ground_truth": "Self-RAG bakes control into training: the model learns to emit reflection tokens that decide when to retrieve and critique its own generations. ReAct achieves control through prompting: the model interleaves free-form reasoning traces with discrete actions, and observations from those actions feed back into the next reasoning step. One mechanism is learned special tokens, the other a prompt-level thought-action-observation loop.",
+    "expected_sources": ["Self-RAG", "REAC T"],
+    "notes": "Cross-paper conceptual comparison; hardest multi_hop in the set since the papers never cite each other."
+  },
+  {
+    "id": "q17",
+    "category": "no_answer",
+    "question": "What does the Self-RAG paper report about performance on image captioning?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Adversarial no_answer: retrieval will surface Self-RAG chunks that look topically relevant, but the paper covers no vision tasks. Tests abstention under in-domain vocabulary pressure."
+  },
+  {
+    "id": "q18",
+    "category": "no_answer",
+    "question": "What chunk size and overlap does the CRAG paper recommend for production deployments?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Plausible-sounding implementation detail that does not exist in the paper. The web can't answer what a paper 'recommends' either, so this stays no_answer rather than needs_web."
+  },
+  {
+    "id": "q19",
+    "category": "needs_web",
+    "question": "What is the current stable version of Python?",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Time-sensitive general knowledge; only the web path can answer it, and any hardcoded ground truth would rot. Success under auto-decline = gate reached, then abstention. Do NOT hardcode a version string here."
+  },
+  {
+    "id": "q20",
+    "category": "known_failure",
+    "question": "Explain that more simply.",
+    "ground_truth": "<ABSTENTION>",
+    "expected_sources": [],
+    "notes": "Layer 4 witnessed issue (live test b): meta/conversational input rides the corrective pipeline and transform_query strips the anaphora. In a fresh single-turn eval there is no antecedent, so abstention IS correct here - tracking that the graph neither spins nor hallucinates an answer to 'that'. Motivates the future intent router."
+  }
+]
