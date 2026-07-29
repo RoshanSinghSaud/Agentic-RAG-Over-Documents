@@ -22,7 +22,9 @@ tavily-python>=0.5.0          # web-search fallback
 # ragas dependency.
 ragas==0.4.3
 
+# --- Layer 5: serving ---
+fastapi>=0.110.0
+uvicorn>=0.29.0
+
 # --- Added in later layers (install when you reach them) ---
 # langsmith>=0.1.0            # Layer 5: observability/tracing
-# fastapi>=0.110.0            # Layer 5: serving
-# uvicorn>=0.29.0            # Layer 5: serving
