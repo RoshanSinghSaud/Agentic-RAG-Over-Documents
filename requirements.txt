@@ -14,6 +14,9 @@ python-dotenv>=1.0.0
 # --- Layer 2 (CRAG) ---
 tavily-python>=0.5.0          # web-search fallback
 
+# --- Layer 4 (memory): SqliteSaver lives in a separate package from core langgraph ---
+langgraph-checkpoint-sqlite>=2.0.0
+
 # --- Layer 5: eval harness ---
 # ragas <=0.4.3 crashes on import next to langchain-community 0.4.x (it imports
 # the removed vertexai module); eval/run_eval.py injects a small shim before

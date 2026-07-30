@@ -1,0 +1,31 @@
+# secrets — never baked into the image, passed at runtime via --env-file
+.env
+.env.example
+
+# runtime state — the vector index and conversation memory are volume mounts,
+# not image contents (see the docker run command for the mount points)
+.chroma/
+checkpoint.db*
+
+# dead weight — venv lives inside the repo; these aren't needed at build time.
+# main.py IS needed in the image now (it's how `docker-compose run` seeds the
+# corpus and ingests); data/ stays out of the build — main.py's fetch_corpus()
+# populates it inside the running container instead of baking it into the image.
+agentic-rag/
+eval/
+notebooks/
+data/
+view_graph.py
+graph.png
+question.json
+output documentation/
+
+# vcs / editor / python noise
+.git/
+.gitignore
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+CLAUDE.md

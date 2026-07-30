@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    image: roshansingh0091/agentic-rag-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./.chroma:/app/.chroma
+      # Bind-mounting a *file* that doesn't exist yet makes Docker create a
+      # directory in its place instead — which breaks SQLite. On a clean
+      # clone, `touch checkpoint.db checkpoint.db-wal checkpoint.db-shm`
+      # once before the first `docker-compose up` / `run`.
+      - ./checkpoint.db:/app/checkpoint.db
+      - ./checkpoint.db-wal:/app/checkpoint.db-wal
+      - ./checkpoint.db-shm:/app/checkpoint.db-shm
