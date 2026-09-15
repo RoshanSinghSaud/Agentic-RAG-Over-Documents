@@ -1,19 +1,19 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
 
+FROM python:3.12-slim AS builder
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
-
-
-COPY requirements.txt .
+COPY requirements.lock.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-  pip install --timeout 120 --retries 10 -r requirements.txt
-# Everything else, filtered by .dockerignore (app.py, src/, requirements.txt
-# survive; the venv, eval/, notebooks/, .git, secrets, and runtime state don't).
+  pip install --timeout 120 --retries 10 -r requirements.lock.txt
+
+FROM python:3.12-slim
+ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
 COPY . .
-
 EXPOSE 8000
-
-# python, not curl — keeps the image from needing an extra apt-get layer.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" || exit 1
-
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health', timeout=3)" || exit 1
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]

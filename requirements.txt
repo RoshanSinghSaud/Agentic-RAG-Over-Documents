@@ -20,7 +20,7 @@ langchain-community==0.4.2                # PyPDFLoader, TextLoader, BM25Retriev
 langchain-openai==1.3.3
 langchain-chroma==1.1.0
 langchain-text-splitters==1.1.2
-langchain==1.3.11                         # NOT imported anywhere in src/ — kept
+                         # NOT imported anywhere in src/ — kept
                                           # pinned because langchain-classic is in
                                           # the working env and may be pulled
                                           # through it. Try dropping on Day 2 and
@@ -38,4 +38,5 @@ tavily-python==0.7.26
 fastapi==0.140.7
 uvicorn==0.49.0
 pydantic==2.13.4                          # imported directly in app.py
+pydantic-settings==2.15.0                 # imported directly in src/config.py
 python-dotenv==1.2.2
