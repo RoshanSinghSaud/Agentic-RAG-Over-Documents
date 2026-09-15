@@ -20,7 +20,6 @@ a FastAPI + Docker deployment.
 | 6 — API (FastAPI `/ask` + `/resume` + `/health`, 409 guards)            | `v0.6-api`         | **done**                 |
 | 7 — Docker (Dockerfile + compose, seed-free clean clone)                | `v0.7-docker`      | **done — verified live** |
 
-
 Verification traces for each layer (real runs showing every router branch firing,
 including a fault-injection test of the hallucination grader) live in
 [`output documentation/`](<output documentation/>).

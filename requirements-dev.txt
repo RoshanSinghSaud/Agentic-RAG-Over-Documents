@@ -1,0 +1,12 @@
+# Eval-only dependencies. NOT installed into the runtime image — ragas drags in
+# datasets/pandas/pyarrow, which is a large share of the image and never runs in
+# production.
+#
+# Install locally with:  pip install -r requirements.txt -r requirements-dev.txt
+
+# ragas <=0.4.3 crashes on import next to langchain-community 0.4.x (it imports
+# the removed vertexai module); eval/run_eval.py injects a shim before importing
+# it. Pinned so a future release doesn't silently change metric definitions
+# under the README's numbers.
+ragas==0.4.3
+datasets==5.0.0
