@@ -147,3 +147,53 @@ healthy.
 answer still has citations.
 
 **Time:** TODO
+
+---
+
+## Day 4 — 2026-09-16
+
+**Goal:** a brand-new container, with no saved search index, should build the
+index by itself at startup and then answer questions.
+
+**Done:**
+
+- The papers now ship inside the image instead of being downloaded at startup.
+- On startup the app checks whether the index is empty. If it is, it builds it
+  before accepting any request. If not, it skips straight to serving.
+- Added `scripts/check_day4.sh`, which tests this from scratch in one command.
+
+**What broke (caught in review, before it ran):** the startup check opened the
+index, and the build step then deleted the index folder while it was still
+open. Chroma can't write to a folder deleted underneath it, so the first boot
+on a fresh host would have crashed with a "readonly database" error. It never
+showed up locally, because my laptop already has an index and the build step
+never runs there.
+
+**How I diagnosed it:** reproduced the same open → delete → rebuild order in a
+small script against the exact Chroma version in the lockfile. Same error.
+
+**Fix:** the startup build no longer deletes the folder — it's already empty,
+which is why it's building. The manual `python main.py ingest` still wipes and
+rebuilds as before. Also changed the "index is empty" error so it fails one
+request instead of possibly stopping the whole app.
+
+**Result:**
+
+| check | result |
+|---|---|
+| first start, empty index | ready in 29s (718 chunks from 156 pages) |
+| test question | correct answer, 6 citations from the Self-RAG paper |
+| memory after one question | 294MB (Render free tier allows 512MB) |
+| restart | ready in 2s, index reused, no rebuild |
+
+**Known limitation — conversation memory:** chat history is saved in a small
+file (`checkpoint.db`) inside the container. On a free host that sleeps when
+idle or redeploys, that file is wiped, so conversations and any pending
+"approve web search?" questions are lost. On Render this happens after 15
+minutes without visitors, not only on redeploy. On EC2 (Day 16) the file will
+live on the server's own disk and survive restarts.
+
+**Still open:** log how long the build itself takes; handle a build that gets
+cut off halfway (right now it would be treated as finished).
+
+**Time:** TODO

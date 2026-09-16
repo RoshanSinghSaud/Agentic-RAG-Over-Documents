@@ -31,11 +31,8 @@ graph = build_graph(checkpointer=saver)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Runs to completion before uvicorn starts accepting connections, so no
-    # request can ever see an empty index. Skip if a previous run (or a
-    # mounted volume) already populated Chroma — ingest() rebuilds from
-    # scratch and re-embeds the whole corpus, which isn't free.
-    if index_size() == 0:
-        ingestion.ingest(rebuild=False)
+    # request can ever see an empty or half-built index.
+    ingestion.ensure_index()
     yield
 
 

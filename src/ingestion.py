@@ -4,6 +4,7 @@ Run once (or whenever the corpus changes):
     python main.py ingest
 """
 import shutil
+import time
 import urllib.request
 from pathlib import Path
 
@@ -73,6 +74,18 @@ def build_vectorstore(chunks):
     )
 
 
+# Written only after a run completes successfully, so its presence — not
+# index_size() — is the source of truth for "the index is usable". A run that
+# dies mid-embedding (dropped connection, rate limit) leaves partial chunks in
+# Chroma with no marker; ensure_index() treats that the same as empty and
+# rebuilds, rather than serving off of a corpus that stopped partway through.
+_MARKER_NAME = ".ingest_complete"
+
+
+def _marker_path() -> Path:
+    return config.CHROMA_DIR / _MARKER_NAME
+
+
 def ingest(rebuild: bool = True):
     if rebuild:
         shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
@@ -85,8 +98,25 @@ def ingest(rebuild: bool = True):
         )
     chunks = chunk_documents(raw)
     build_vectorstore(chunks)
+    _marker_path().touch()
     print(
         f"Ingested {len(raw)} document pages -> {len(chunks)} chunks "
         f"into Chroma at {config.CHROMA_DIR}"
     )
     return chunks
+
+
+def ensure_index() -> None:
+    """Build the index if it's missing or incomplete; leave a good one alone.
+
+    Called from the FastAPI lifespan so startup blocks until the store is
+    populated, instead of serving requests against an empty or half-built
+    index. No marker means either a clean-clone empty store or a prior ingest
+    that never finished — both get a full rebuild, since partial chunks
+    already sitting in Chroma aren't safe to just add more documents on top of.
+    """
+    if _marker_path().exists():
+        return
+    start = time.perf_counter()
+    ingest(rebuild=True)
+    print(f"Index build took {time.perf_counter() - start:.1f}s")
