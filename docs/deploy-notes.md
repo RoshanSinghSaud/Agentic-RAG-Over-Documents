@@ -104,63 +104,46 @@ compiler if a package ever needs to build from source. Not for size. Claiming
 
 ## Day 3 — 2026-09-15
 
-**Goal:** move every setting out of the code and into environment variables, make
-missing configuration stop the app at startup instead of at request time, and let
-the host decide which port to listen on.
+**Goal:** move the settings that differ per machine out of the code and into
+environment variables, and make the app honest about whether it can actually
+serve.
 
-**What broke:**
+**Done:**
 
-`curl localhost:9000/health` failed with `Failed to connect ... Couldn't connect
-to server`, right after a container that had started perfectly well.
+- Paths and tunables in `src/config.py` now come from environment variables via
+  `pydantic-settings`, each defaulting to the value the code used before.
+- `OPENAI_API_KEY` is required with no default, so the process stops at startup
+  instead of failing on the first question.
+- `CMD` and `HEALTHCHECK` read `${PORT:-8000}` so the host can pick the port.
+- Built `/ready`: 503 when the vector store is empty or unreachable, 200 with a
+  document count when the app can actually answer.
 
-**How I diagnosed it:**
+**Verified:** the container with no key exits with
+`Configuration error: required environment variable(s) not set: OPENAI_API_KEY`.
+With the key it starts and serves. `-e PORT=9000` moves the listener.
 
-The failure looked like a port-mapping mistake, which is what I went looking for
-first. It wasn't. `docker run` without `-d` runs in the foreground and holds the
-terminal, so I had pressed Ctrl+C to get my prompt back — which stopped the
-container. By the time curl ran there was genuinely nothing listening. The fix is
-`-d` plus `docker logs`, which is also how the app will run on a real host: no
-server runs attached to a terminal.
+Note the distinction: the **image built fine** in both cases. It was the
+**container** that refused to start — the image is the sealed box, the container
+is that box running with an environment attached.
 
-Worth recording separately: **the fail-fast behaviour cannot be tested on my Mac.**
-`load_dotenv()` reads `.env`, so unsetting `OPENAI_API_KEY` in the shell puts it
-straight back. The only honest test is in the container, where `.dockerignore`
-excludes `.env` and there is no key to find. Same shape as the Day 1 lesson: my
-laptop carries state the container doesn't.
+**What broke:** `index_size()` populates the module-level `_vectorstore`
+singleton so `/ready` can count documents cheaply. But `_ensure_loaded()` — which
+builds the BM25 index — decided it had nothing left to do by checking that same
+variable. So a `/ready` probe arriving before the first `/ask` left `_bm25`
+unbuilt and sparse retrieval dead.
 
-**Fix:**
+**How I diagnosed it:** order-dependent, which is what made it dangerous. Calling
+`/ask` first works, and that's what I do by hand. A container calls `/ready`
+first, every 30 seconds, from startup. It would never have failed locally and
+would have surfaced as "retrieval is broken in production" after deploying.
 
-- `src/config.py` rewritten on `pydantic-settings`. Every constant became a field
-  whose default is the old hardcoded value, so behaviour is unchanged unless
-  something is explicitly overridden. The module still exports the same
-  upper-case names, so no other file changed.
-- `openai_api_key: str` with no default is the whole fail-fast mechanism —
-  `Settings()` raises at import, before uvicorn binds a port. A `try/except`
-  turns pydantic's error into a plain message naming the missing variable.
-- `TAVILY_API_KEY` stays optional: web search degrades, the app still serves.
-- `load_dotenv()` kept deliberately. `langchain-openai` reads `OPENAI_API_KEY`
-  from `os.environ` directly, not from the Settings object. Removing it would
-  produce an app that starts cleanly, validates happily, and then fails on the
-  first request with an auth error.
-- `CMD` changed from JSON form to `sh -c "exec uvicorn ... --port ${PORT:-8000}"`.
-  JSON form doesn't expand variables, so `$PORT` would have been passed as a
-  literal string. `exec` makes uvicorn replace the shell and become PID 1, so it
-  receives Docker's SIGTERM itself — without it the shell swallows the signal and
-  the process is hard-killed ten seconds later, mid-request.
-- `HEALTHCHECK` also read `${PORT:-8000}` instead of a second hardcoded 8000. The
-  port is decided in one place and everything that mentions it reads from there.
-- `.env.example` rewritten to list every variable with its default.
+**Fix:** guard on what the function actually builds, not on a variable another
+function now writes — `if _bm25 is not None: return`. Also: `/ready` answers 503
+on every failure path rather than raising a 500, and the Docker `HEALTHCHECK` was
+still probing `/health`, so Docker would have called an empty-index container
+healthy.
 
-**Verified:**
-
-| test | result |
-|---|---|
-| container with no key | exits with `Configuration error: required environment variable(s) not set: OPENAI_API_KEY` |
-| container with key | starts, `/health` returns 200 |
-| `CHROMA_DIR=/tmp/somewhere` locally | config reports the overridden path |
-| `-e PORT=9000` | uvicorn logs `running on http://0.0.0.0:9000` |
-
-**Still open:** `/ready` — the endpoint that reports whether the index is actually
-loaded — is not built yet.
+**Regression test for Day 7:** probe `/ready` before the first `/ask`, assert the
+answer still has citations.
 
 **Time:** TODO

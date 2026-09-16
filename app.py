@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from src import config
 from src.graph import build_graph
 from src.nodes import ABSTENTION
+from src.retrieval import index_size
 
 
 conn = sqlite3.connect(str(config.CHECKPOINT_DB), check_same_thread=False)
@@ -158,3 +159,27 @@ def resume(request: ResumeRequest) -> AskResult:
 
     result = graph.invoke(Command(resume=request.approved), config=run_config)
     return _to_result(result, request.thread_id, question_before)
+
+@app.get("/ready")
+def ready() -> dict:
+    """Liveness vs readiness: /health says the process is up; this says it can
+    actually answer a question. 503 (not 200-with-a-flag) so load balancers
+    and orchestrators route traffic away until ingestion has run.
+
+    Every failure path here answers 503. A readiness probe that raises is a
+    probe reporting 500 for the one condition it exists to describe.
+    """
+    try:
+        count = index_size()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"vector store unreachable at {config.CHROMA_DIR}: {exc}",
+        ) from exc
+
+    if count == 0:
+        raise HTTPException(
+            status_code=503,
+            detail="document index is empty; run `python main.py ingest` first.",
+        )
+    return {"status": "ready", "documents": count}

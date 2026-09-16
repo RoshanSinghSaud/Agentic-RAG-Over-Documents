@@ -34,9 +34,27 @@ def _all_documents_from_chroma(vs: Chroma):
     ]
 
 
+def index_size() -> int:
+    """Cheap readiness check: how many chunks are in the persisted vector store.
+
+    Unlike _ensure_loaded(), this doesn't build the BM25 index or raise on an
+    empty store, so /ready can call it on every probe without paying the cost
+    (or crash) of a cold start.
+    """
+    global _vectorstore
+    if _vectorstore is None:
+        _vectorstore = _load_chroma()
+    # _collection is private API. Safe because the lockfile pins chromadb and
+    # langchain-chroma; re-check this line whenever either is bumped.
+    return _vectorstore._collection.count()
+
+
 def _ensure_loaded():
     global _vectorstore, _bm25, _all_docs
-    if _vectorstore is not None:
+    # Guard on _bm25, NOT _vectorstore: index_size() also populates
+    # _vectorstore, so a /ready probe before the first /ask would make this
+    # return early and leave _bm25 unbuilt — killing sparse retrieval.
+    if _bm25 is not None:
         return
     _vectorstore = _load_chroma()
     _all_docs = _all_documents_from_chroma(_vectorstore)
