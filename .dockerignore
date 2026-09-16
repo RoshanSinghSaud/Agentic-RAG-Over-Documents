@@ -14,7 +14,7 @@ checkpoint.db*
 agentic-rag/
 eval/
 notebooks/
-data/
+
 view_graph.py
 graph.png
 question.json

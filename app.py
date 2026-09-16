@@ -8,6 +8,7 @@ Run with:
     uvicorn app:app --reload
 """
 import sqlite3
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal, Union
 
 from fastapi import FastAPI, HTTPException
@@ -16,7 +17,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from src import config
+from src import config, ingestion
 from src.graph import build_graph
 from src.nodes import ABSTENTION
 from src.retrieval import index_size
@@ -26,7 +27,19 @@ conn = sqlite3.connect(str(config.CHECKPOINT_DB), check_same_thread=False)
 saver = SqliteSaver(conn)
 graph = build_graph(checkpointer=saver)
 
-app = FastAPI(title="Agentic RAG")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs to completion before uvicorn starts accepting connections, so no
+    # request can ever see an empty index. Skip if a previous run (or a
+    # mounted volume) already populated Chroma — ingest() rebuilds from
+    # scratch and re-embeds the whole corpus, which isn't free.
+    if index_size() == 0:
+        ingestion.ingest(rebuild=False)
+    yield
+
+
+app = FastAPI(title="Agentic RAG", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):

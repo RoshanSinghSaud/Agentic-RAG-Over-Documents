@@ -73,8 +73,9 @@ def build_vectorstore(chunks):
     )
 
 
-def ingest():
-    shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
+def ingest(rebuild: bool = True):
+    if rebuild:
+        shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
     fetch_corpus()
     raw = load_documents()
     if not raw:

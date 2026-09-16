@@ -59,7 +59,7 @@ def _ensure_loaded():
     _vectorstore = _load_chroma()
     _all_docs = _all_documents_from_chroma(_vectorstore)
     if not _all_docs:
-        raise SystemExit("Chroma is empty. Run `python main.py ingest` first.")
+        raise RuntimeError("Chroma is empty. Run `python main.py ingest` first.")
     _bm25 = BM25Retriever.from_documents(_all_docs)
     _bm25.k = config.SPARSE_K
 
