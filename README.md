@@ -19,7 +19,7 @@ a FastAPI + Docker deployment.
 | 5 — Eval (RAGAS + golden set, caught a real data bug)                   | `v0.5-eval`        | **done**                 |
 | 6 — API (FastAPI `/ask` + `/resume` + `/health`, 409 guards)            | `v0.6-api`         | **done**                 |
 | 7 — Docker (Dockerfile + compose, seed-free clean clone)                | `v0.7-docker`      | **done — verified live** |
-| 8 — Deploy + ops (env-driven config, lockfile, CI, AWS, IaC)            | in progress        | branch `layer8-deploy`   |
+| 8 — Deploy + ops (env-driven config, Render, lockfile, CI, AWS, IaC)    | in progress        | branch `layer8-deploy`   |
 
 Verification traces for each layer (real runs showing every router branch firing,
 including a fault-injection test of the hallucination grader) live in
@@ -27,11 +27,11 @@ including a fault-injection test of the hallucination grader) live in
 
 ## Image size
 
-| build                             | disk  | compressed |
-| --------------------------------- | ----- | ---------- |
-| baseline                          | 960MB | 199MB      |
-| unused `langchain` dropped        | 958MB | 199MB      |
-| multi-stage + pinned lockfile     | 963MB | 199MB      |
+| build                         | disk  | compressed |
+| ----------------------------- | ----- | ---------- |
+| baseline                      | 960MB | 199MB      |
+| unused `langchain` dropped    | 958MB | 199MB      |
+| multi-stage + pinned lockfile | 963MB | 199MB      |
 
 The multi-stage build made the image 3MB **larger**: the venv it copies carries its
 own pip and setuptools alongside the slim base image's copy. Compressed size — the
