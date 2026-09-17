@@ -13,6 +13,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY . .
+# Bakes the papers into the image so a Render cold start never depends on
+# arXiv responding. Runs before any secrets exist, hence a script that only
+# imports src.corpus (stdlib-only) rather than src.ingestion, which pulls in
+# src.config and exits without OPENAI_API_KEY.
+RUN python scripts/fetch_corpus.py
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/ready', timeout=3)" || exit 1

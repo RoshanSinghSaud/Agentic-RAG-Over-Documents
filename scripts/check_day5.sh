@@ -68,6 +68,11 @@ T=$(wait_ready) || { echo "$T"; exit 1; }
 echo "  ready after ${T}s  (on Render, a sleeping app's wake-up time)"
 [ "$(code GET /health)" = 200 ] && ok "/health 200 without key" || bad "/health not 200"
 [ "$(code GET /ready)"  = 200 ] && ok "/ready 200 without key"  || bad "/ready not 200"
+DOCS=$(curl -s "$BASE/ready" | python3 -c "import sys,json; print(json.load(sys.stdin).get('documents',0))" 2>/dev/null || echo 0)
+# The full corpus is ~700 chunks. A handful means the papers never made it into
+# the image and only data/README.md was indexed.
+[ "${DOCS:-0}" -ge 500 ] && ok "index has $DOCS chunks" \
+  || bad "index has only ${DOCS:-0} chunks (want ~700): papers missing from the image?"
 
 Q='{"thread_id":"day5-check","question":"What are reflection tokens in Self-RAG?"}'
 

@@ -5,7 +5,6 @@ Run once (or whenever the corpus changes):
 """
 import shutil
 import time
-import urllib.request
 from pathlib import Path
 
 from langchain_chroma import Chroma
@@ -14,39 +13,16 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from . import config
-
-# The locked corpus (see data/README.md) — arXiv IDs are stable, so this is a
-# reproducible substitute for committing the PDFs to git.
-_CORPUS = [
-    ("attention-is-all-you-need.pdf", "1706.03762"),
-    ("Retrieval-Augmented_Generation_RAG.pdf", "2005.11401"),
-    ("Dense Passage Retrieval for Open-Domain Question Answering.pdf", "2004.04906"),
-    ("REAC T- SYNERGIZING REASONING AND ACTING IN LANGUAGE MODELS.pdf", "2210.03629"),
-    ("Lost in the Middle- How Language Models Use Long Contexts.pdf", "2307.03172"),
-    ("HyDE.pdf", "2212.10496"),
-    ("Corrective-RAG.pdf", "2401.15884"),
-    ("Self-RAG.pdf", "2310.11511"),
-]
-
-
-def fetch_corpus(data_dir: Path = config.DATA_DIR) -> None:
-    """Seed data/ with the locked corpus from arXiv, but only on a clean clone —
-    if data_dir already holds any document, leave it alone (someone may be
-    testing a deliberately different subset)."""
-    data_dir.mkdir(parents=True, exist_ok=True)
-    has_docs = any(p.suffix.lower() in {".pdf", ".md", ".txt"} for p in data_dir.iterdir())
-    if has_docs:
-        return
-    for filename, arxiv_id in _CORPUS:
-        dest = data_dir / filename
-        print(f"Fetching {filename} from arXiv ({arxiv_id})...")
-        urllib.request.urlretrieve(f"https://arxiv.org/pdf/{arxiv_id}", dest)
+from .corpus import fetch_corpus
 
 
 def load_documents(data_dir: Path = config.DATA_DIR):
-    """Load every PDF / markdown / text file under data/."""
+    """Load every PDF / markdown / text file under data/, except README.md —
+    that's corpus-folder documentation, not a paper to answer questions from."""
     docs = []
     for path in sorted(data_dir.rglob("*")):
+        if path.name == "README.md":
+            continue
         suffix = path.suffix.lower()
         if suffix == ".pdf":
             docs.extend(PyPDFLoader(str(path)).load())
@@ -86,18 +62,25 @@ def _marker_path() -> Path:
     return config.CHROMA_DIR / _MARKER_NAME
 
 
+def _timed(label: str, fn, *args):
+    start = time.perf_counter()
+    result = fn(*args)
+    print(f"  {label}: {time.perf_counter() - start:.1f}s")
+    return result
+
+
 def ingest(rebuild: bool = True):
     if rebuild:
         shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
-    fetch_corpus()
-    raw = load_documents()
+    _timed("fetch_corpus", fetch_corpus, config.DATA_DIR)
+    raw = _timed("load_documents", load_documents)
     if not raw:
         raise SystemExit(
             f"No documents found in {config.DATA_DIR}. "
             "Drop some PDFs/markdown there first (see data/README.md)."
         )
-    chunks = chunk_documents(raw)
-    build_vectorstore(chunks)
+    chunks = _timed("chunk_documents", chunk_documents, raw)
+    _timed("build_vectorstore", build_vectorstore, chunks)
     _marker_path().touch()
     print(
         f"Ingested {len(raw)} document pages -> {len(chunks)} chunks "

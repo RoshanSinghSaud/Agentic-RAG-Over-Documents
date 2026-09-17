@@ -8,9 +8,9 @@
 checkpoint.db*
 
 # dead weight — venv lives inside the repo; these aren't needed at build time.
-# main.py IS needed in the image now (it's how `docker-compose run` seeds the
-# corpus and ingests); data/ stays out of the build — main.py's fetch_corpus()
-# populates it inside the running container instead of baking it into the image.
+# data/ is NOT excluded: scripts/fetch_corpus.py downloads the papers into it
+# during the build (see Dockerfile), so the image ships with the corpus baked
+# in rather than fetching it on every container start.
 agentic-rag/
 eval/
 notebooks/
