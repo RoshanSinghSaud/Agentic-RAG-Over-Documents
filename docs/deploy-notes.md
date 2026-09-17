@@ -197,3 +197,25 @@ live on the server's own disk and survive restarts.
 cut off halfway (right now it would be treated as finished).
 
 **Time:** TODO
+
+---
+
+## Day 5 — 2026-09-17
+
+**Goal:** an API key on `/ask` and `/resume`, a per-IP rate limit on the same
+two endpoints, and pin concurrency so both actually hold.
+
+**Done:**
+
+- `X-API-Key` header, required and constant-time compared, gates `/ask` and
+  `/resume`; `/health` and `/ready` stay open for the platform's own health
+  checks. Shows up in `/docs` as an Authorize button.
+- In-memory per-IP rate limit (10 requests/minute) as a dependency on the same
+  two endpoints, checked before the API key and before the graph runs, so a
+  throttled or unauthenticated request never reaches `graph.invoke`.
+- Dockerfile `CMD` pinned to `--workers 1`.
+
+SQLite's write lock only works inside one process, and the in-memory rate
+limit only works inside one process too.
+
+**Time:** TODO

@@ -7,11 +7,15 @@ path params) — see AskRequest / ResumeRequest below.
 Run with:
     uvicorn app:app --reload
 """
+import secrets
 import sqlite3
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal, Union
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.security import APIKeyHeader
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -37,6 +41,36 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agentic RAG", lifespan=lifespan)
+
+_api_key_header = APIKeyHeader(name="X-API-Key")
+
+
+def require_api_key(key: str = Security(_api_key_header)) -> None:
+    # compare_digest, not ==: a plain string comparison short-circuits on the
+    # first mismatched byte, which leaks how many leading characters of the
+    # guess were correct via response timing.
+    if not secrets.compare_digest(key, config.API_KEY):
+        raise HTTPException(status_code=401, detail="invalid API key")
+
+
+# Per-IP request timestamps, in memory. Only correct with a single worker
+# process (see Dockerfile) — each worker would keep its own dict, so a client
+# could get RATE_LIMIT requests through per worker instead of in total.
+RATE_LIMIT = 10          # requests
+RATE_LIMIT_WINDOW = 60.0  # seconds
+_request_times: dict[str, list[float]] = defaultdict(list)
+
+
+def rate_limit(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    times = _request_times[ip]
+    cutoff = now - RATE_LIMIT_WINDOW
+    while times and times[0] < cutoff:
+        times.pop(0)
+    if len(times) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="rate limit exceeded: 10 requests/minute")
+    times.append(now)
 
 
 class AskRequest(BaseModel):
@@ -131,7 +165,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/ask", response_model=AskResult)
+@app.post("/ask", response_model=AskResult, dependencies=[Depends(rate_limit), Depends(require_api_key)])
 def ask(request: AskRequest) -> AskResult:
     run_config = _run_config(request.thread_id)
 
@@ -155,7 +189,7 @@ def ask(request: AskRequest) -> AskResult:
     return _to_result(result, request.thread_id, request.question)
 
 
-@app.post("/resume", response_model=AskResult)
+@app.post("/resume", response_model=AskResult, dependencies=[Depends(rate_limit), Depends(require_api_key)])
 def resume(request: ResumeRequest) -> AskResult:
     run_config = _run_config(request.thread_id)
 

@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # --- Secrets ---
     openai_api_key: str                       # required: no default, no start without it
     tavily_api_key: str | None = None         # optional: web search degrades, app still serves
+    api_key: str                              # required: gates /ask and /resume (see app.py)
 
     # --- Models ---
     llm_model: str = "gpt-4o-mini"
@@ -74,6 +75,7 @@ except ValidationError as exc:
 # else in the codebase has to know that settings now come from the environment.
 LLM_MODEL = settings.llm_model
 EMBEDDING_MODEL = settings.embedding_model
+API_KEY = settings.api_key
 
 DATA_DIR = settings.data_dir
 CHROMA_DIR = settings.chroma_dir
