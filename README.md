@@ -6,6 +6,13 @@ layer by layer into a graph that grades its own retrieval (**CRAG**) and its own
 answers (**Self-RAG**), with memory, a human-approval gate before web search, and
 a FastAPI + Docker deployment.
 
+   **Live demo:** 
+   
+   https://agentic-rag-over-documents.onrender.com/docs
+   
+   API key required — email me at roshansinghsaud2001@gmail.com for one.
+   Free hosting: the first request after 15 idle minutes can take about a minute.
+   
 > This README tracks build status and how to run it.
 
 ## Build status
