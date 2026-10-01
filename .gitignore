@@ -36,4 +36,4 @@ data/*.md
 
 # Personal / not for the public repo
 output documentation/demo_video_script.md
-docs/deployment-roadmap.md
+docs/deployment-roadmap*.md
