@@ -1,0 +1,32 @@
+The Transformer architecture replaced recurrence and convolution with
+self-attention as the primary mechanism for modeling sequences. Each layer
+computes attention scores between every pair of tokens in the input, letting
+the model weigh distant tokens just as easily as neighboring ones. This
+removes the sequential bottleneck that limited recurrent networks, since all
+positions can be processed in parallel during training.
+
+A Transformer block combines multi-head self-attention with a position-wise
+feed-forward network, each wrapped in a residual connection and followed by
+layer normalization. Multiple attention heads let the model attend to
+different representation subspaces at different positions simultaneously,
+which in practice lets one head track syntactic relationships while another
+tracks longer-range semantic dependencies.
+
+Because self-attention has no inherent notion of token order, positional
+encodings are added to the input embeddings before the first layer. The
+original design used fixed sinusoidal functions of different frequencies,
+though later variants learn the positional embeddings instead or use
+relative position schemes.
+
+The encoder-decoder split in the original architecture suited sequence-to-
+sequence tasks like machine translation: the encoder builds a contextual
+representation of the source sequence, and the decoder attends to both its
+own previous outputs and the encoder's representation to generate the target
+sequence one token at a time. Later models dropped one half or the other —
+decoder-only architectures became the dominant pattern for large language
+models, while encoder-only architectures became the standard for embedding
+and classification tasks.
+
+Training a Transformer at scale is largely a matter of data and compute
+rather than architectural novelty, which is part of why the same core block
+has powered nearly every major language model since its introduction.

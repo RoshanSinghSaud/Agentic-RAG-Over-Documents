@@ -10,3 +10,10 @@
 # under the README's numbers.
 ragas==0.4.3
 datasets==5.0.0
+
+# Test suite. httpx is pinned alongside pytest because Starlette's TestClient
+# (used to exercise app.py's FastAPI routes) requires it but doesn't declare
+# it as a direct dependency — an unpinned httpx could pick up a version whose
+# API TestClient doesn't expect.
+pytest==8.4.2
+httpx==0.28.1

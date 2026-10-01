@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+from chromadb.api.shared_system_client import SharedSystemClient
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_openai import OpenAIEmbeddings
@@ -72,6 +73,13 @@ def _timed(label: str, fn, *args):
 def ingest(rebuild: bool = True):
     if rebuild:
         shutil.rmtree(config.CHROMA_DIR, ignore_errors=True)
+        # chromadb caches its client system per persist_directory for the life
+        # of the process (SharedSystemClient). Deleting the directory doesn't
+        # invalidate that cache, so a second ingest() in the same process
+        # reused a connection pointing at now-gone files and every write
+        # failed with "attempt to write a readonly database". Clearing the
+        # cache forces the next Chroma(...) below to open a fresh connection.
+        SharedSystemClient.clear_system_cache()
     _timed("fetch_corpus", fetch_corpus, config.DATA_DIR)
     raw = _timed("load_documents", load_documents)
     if not raw:
