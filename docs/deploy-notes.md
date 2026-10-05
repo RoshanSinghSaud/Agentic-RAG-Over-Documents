@@ -379,3 +379,48 @@ malformed request: 4).
   not as a default value.
 
 **Time:** TODO
+
+## A1 — AWS account, guardrails, CLI — 2026-10-05
+
+**Setup:**
+
+- **Account:** AWS "new experience" project **Try Catch Finally** — Google
+  sign-in, Free plan, $100 credit, no card. Credits: $___, expire ____.
+  A second, older AWS account exists under my email (no credits) — unused,
+  nothing gets built there.
+- **Region: `ap-southeast-2` (Sydney).** Only region used. Assigned by AWS:
+  new-experience sign-ups from Asia-Pacific are placed in Sydney and the
+  Region can't be changed without activating "advanced features". (Earlier
+  plan said `ap-south-1` Mumbai — corrected.)
+- **Admin identity:** IAM user `RAGproject` (AdministratorAccess). CLI auth
+  via an access key stored only in `~/.aws/credentials` — never in the repo,
+  `.env`, the image, or EC2. EC2 will use an IAM role instead (A2).
+  `aws sts get-caller-identity` → `...:user/RAGproject`.
+- **MFA: deferred.** Not yet enabled on the Google sign-in or on `RAGproject`.
+  Open item — do it before A2 goes live (settings.aws.com → Security →
+  Register device, and/or Google 2-Step Verification).
+- **Budget:** TODO — $5 monthly cost budget, or note here if the Free plan
+  blocks Budgets. The Free plan can't charge anyway; paid projects get a hard
+  spend cap that pauses the project rather than billing past it.
+
+**Findings:**
+
+- **The console kept opening in Sydney, and that was the platform, not me.**
+  I first assumed a wrong default and tried to force Mumbai. Then the menu
+  showed *Projects / Team / Switch project* instead of *Security
+  credentials*, which is how I worked out this is AWS's new project-based
+  sign-up, where the Region is fixed per project. Lesson: check *which kind*
+  of account you're in before following a tutorial written for classic
+  accounts.
+- **Free plan blocks some console services.** Unified Settings (default
+  Region) returned "Upgrade to paid plan". Didn't upgrade — that would end
+  the $0 cap. Region is enforced by the CLI default
+  (`aws configure set region ap-southeast-2`) and by checking `region=` in
+  the console URL before creating anything.
+- **IAM user created without console access.** `RAGproject` was created with
+  only programmatic access, so no password and no Console sign-in section.
+  Fix if needed: `aws iam create-login-profile --user-name RAGproject ...`.
+- **Credits are per account, not per user.** Seeing $100 under one login and
+  $0 under another meant two different accounts, not a permissions issue.
+
+**Time:** TODO
