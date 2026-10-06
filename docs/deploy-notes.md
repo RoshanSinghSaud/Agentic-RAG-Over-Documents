@@ -424,3 +424,81 @@ malformed request: 4).
   $0 under another meant two different accounts, not a permissions issue.
 
 **Time:** TODO
+
+## A2 — Image to ECR, running on EC2 — 2026-10-06
+
+**Goal:** push a versioned image to ECR and run it on EC2 with no AWS
+credentials on the box.
+
+**Setup:**
+
+- **ECR:** repository `rag-app`; image pushed as
+  `272037674852.dkr.ecr.ap-southeast-2.amazonaws.com/rag-app:v1`, built with
+  `docker buildx build --platform linux/amd64 --provenance=false ... --push`.
+  `--platform` because the Mac is ARM and EC2 is x86 — an ARM image dies there
+  with `exec format error`. Tagged `v1`, never `:latest`, so rollback is
+  always possible.
+- **IAM role `rag-ec2-role`:** EC2 trust, one managed policy —
+  `AmazonEC2ContainerRegistryReadOnly`. The box pulls from ECR on short-lived
+  role credentials; no access keys ever on it. The console created the
+  instance profile (the wrapper that lets EC2 use a role) silently; the CLI
+  and Terraform make you create it explicitly.
+- **EC2:** Ubuntu 24.04 x86, t3.small (2GB — app ~300MB plus Docker, OS and
+  the boot-time ingest), launched from the console wizard in
+  `ap-southeast-2`. User data installs `docker.io` and AWS CLI v2 and adds
+  `ubuntu` to the docker group.
+- **Security group:** 22 from my IP only, 8000 from anywhere — the API is
+  public, the shell is not.
+- **Secrets:** only `OPENAI_API_KEY`, `API_KEY`, `TAVILY_API_KEY` copied over
+  with `scp` into `/opt/rag/.env` (chmod 600). Filtered with
+  `sed 's/^ *//' .env | grep -E ...` — my local `.env` has a leading space on
+  the Tavily line. Never in the image, never in git.
+- **Run:** `docker run -d --restart unless-stopped -p 8000:8000 --env-file
+  /opt/rag/.env -e CHROMA_DIR=/state/.chroma -e
+  CHECKPOINT_DB=/state/checkpoint.db -v /opt/rag/state:/state ...:v1`
+
+**Result:**
+
+- `curl http://<public-ip>:8000/health` from my Mac → `200 {"status":"ok"}`.
+- `/ready` → `{"status":"ready","documents":716}`.
+- **Cold boot: 30s** (container start → `/ready`, timed with
+  `time (until curl -sf localhost:8000/ready; do sleep 2; done)`).
+- Warm restart (`docker restart rag`): ___s — TODO.
+- **State:** the index and `checkpoint.db` live on a host volume, so they
+  survive a container restart here. On Render there is no volume, so every
+  redeploy re-ingests and conversation memory resets. That contrast is the
+  answer to "how do you handle state?".
+- **Chunk count differs from Render** (716 here vs 692 there) from the same
+  Dockerfile — the corpus is fetched from arXiv at build time, so builds on
+  different days can get different PDF versions. Second data point for the
+  "pin arXiv versions" open item.
+
+**What broke:**
+
+1. `ssh ... Permission denied (publickey)`.
+2. `curl` to port 8000 from my Mac timed out after 75s, while `curl
+   localhost:8000/ready` on the instance worked.
+3. A pasted block of AWS CLI commands stopped after the first one.
+
+**How I diagnosed it:**
+
+1. The server answered, so network and the port-22 rule were fine — it was
+   authentication. `ls -l ~/.ssh/rag-key.pem` → no such file: the key was
+   still in Downloads. When `-i` points at a missing file, ssh only warns and
+   falls back to default keys, which the instance rejects.
+2. Worked on the box → the app and the `-p 8000:8000` mapping were fine. A
+   *timeout* rather than *connection refused* means packets were dropped, not
+   that nothing was listening — on AWS that's the security group. It had no
+   inbound rule for 8000 (missed in the wizard's network step).
+3. `create-repository` printed long JSON, which the AWS CLI opened in a
+   pager; quitting the pager discarded the rest of the paste.
+
+**Fix:** moved the key to `~/.ssh/` + `chmod 400`; added inbound rule Custom
+TCP 8000 from `0.0.0.0/0` (takes effect immediately, no reboot);
+`--no-cli-pager` on CLI commands with long output.
+
+**Loose ends:** instance is Name-tagged `rag-ec2-role` (same as the IAM
+role — rename to `rag-app`); public IP changes on every stop/start (expected,
+no Elastic IP); MFA still not enabled (from A1).
+
+**Time:** TODO
