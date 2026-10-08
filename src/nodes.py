@@ -6,6 +6,7 @@ Layer map: retrieve/generate (L1) - document grading, query rewrite, web
 fallback (L2, CRAG) - answer grading (L3, Self-RAG) - finalize and the human
 approval gate (L4, memory + HITL).
 """
+import logging
 from typing import List, Literal
 
 from langchain_core.documents import Document
@@ -18,6 +19,8 @@ from . import config, retrieval
 from .state import GraphState
 
 from langgraph.types import interrupt
+
+logger = logging.getLogger(__name__)
 
 _llm = None
 _tavily = None
@@ -220,10 +223,19 @@ def web_search(state: GraphState) -> GraphState:
     Gated by ``human_approval_gate`` (Layer 4): this node only runs after an
     explicit human approval, since it's the one action that reaches outside
     the document corpus.
+
+    Degrades instead of crashing: if Tavily fails (missing/invalid key,
+    network, quota), log at ERROR and continue to generate with the corpus
+    documents only; the generate prompt's abstention rule keeps that answer
+    honest. Before this, any Tavily failure surfaced as a 500 from /resume.
     """
     question = state["question"]
     print(f"--- WEB SEARCH (Tavily): {question} ---")
-    response = _get_tavily().search(query=question, max_results=config.WEB_SEARCH_K)
+    try:
+        response = _get_tavily().search(query=question, max_results=config.WEB_SEARCH_K)
+    except Exception:
+        logger.exception("web_search failed; continuing without web results")
+        return {"web_search": False}
 
     web_docs: List[Document] = [
         Document(

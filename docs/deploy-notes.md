@@ -502,3 +502,91 @@ role — rename to `rag-app`); public IP changes on every stop/start (expected,
 no Elastic IP); MFA still not enabled (from A1).
 
 **Time:** TODO
+
+## A3 — CloudWatch logs + one alarm — 2026-10-07/08
+
+**Goal:** ship container logs to CloudWatch, find one full agent run, and get
+emailed when the app logs an error. Logging tells you what happened;
+monitoring tells you it is happening.
+
+**Setup (done in the console, to learn it):**
+
+- **IAM:** inline policy `rag-cloudwatch-logs` on `rag-ec2-role` —
+  `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` on
+  `arn:aws:logs:ap-southeast-2:272037674852:log-group:/rag/app*` only. Inline
+  because it belongs to this one role and should die with it.
+- **Container:** same `docker run` as A2 plus `--log-driver=awslogs`
+  (`awslogs-group=/rag/app`, `awslogs-create-group=true`) and
+  `-e PYTHONUNBUFFERED=1`. The Docker daemon gets role credentials from the
+  instance — no keys on the box. `docker logs` stops working; logs live in
+  CloudWatch now.
+- **Metric filter** `rag-errors`: pattern `ERROR` → metric `RAG/RagErrors`,
+  value 1, default 0.
+- **Alarm** `rag-errors`: Sum ≥ 1 over 5 min, 1 of 1 datapoints, missing data
+  = not breaching → SNS topic `rag-alerts` → email (subscription confirmed).
+- **Image v2** (`rag-app:v2`): Tavily failure handling + root logging config
+  (see below). `v1` kept in ECR for rollback.
+
+**Result:**
+
+- One full agent run found in Logs Insights (POST /ask → TRANSFORM → HITL →
+  WEB SEARCH → GRADE ANSWER → POST /resume 200). Screenshot: TODO path.
+- Alarm fired on purpose: restarted with `-e OPENAI_API_KEY=sk-bad`, one
+  `/ask` → 500 → uvicorn `ERROR: Exception in ASGI application` → alarm
+  In alarm → email. Screenshot: TODO path. Time from request to email: ___.
+
+**What broke:**
+
+1. First `docker run` with awslogs failed: `AccessDeniedException ...
+   assumed-role/rag-ec2-role/... is not authorized to perform:
+   logs:CreateLogStream`. (Expected — the A2 role could only pull from ECR.
+   Docker tries CreateLogStream before CreateLogGroup.)
+2. IAM console: the visual editor saved `"Action": []`, and the policy
+   checker showed "Unexpected error ... access-analyzer:ValidatePolicy ...
+   explicit deny in a service control policy".
+3. `/resume` after approving web search returned `Internal Server Error`.
+4. SSH timed out after a day away.
+
+**How I diagnosed it:**
+
+1. Read the error as who / what / on what: the role, the action, the
+   log-stream ARN. The policy has to allow exactly that.
+2. The Free-plan account lives in an AWS-managed organization whose SCP
+   denies Access Analyzer — only the linter failed, not the save. The empty
+   Action list was a separate, real bug; caught it on the JSON tab.
+3. Found the traceback in CloudWatch — the first real use of A3.
+   `docker exec rag printenv TAVILY_API_KEY | cut -c1-5` printed `"tvly`:
+   the key carried literal quotes. python-dotenv strips quotes on my Mac;
+   Docker's `--env-file` does not. Tavily rejected `"tvly-…` as invalid, and
+   `web_search()` had no error handling, so it became a 500 — even though
+   `config.py` called Tavily "optional: web search degrades".
+4. My home IP changed; the SSH rule only allows my IP.
+
+**Fix:**
+
+1. Added the inline policy (JSON pasted, checked on the JSON tab).
+2. `sed -E 's/^([A-Z_]+)="(.*)"$/\1=\2/'` on `/opt/rag/.env`, then
+   `docker rm` + `docker run` (env-file is read at create time, so `docker
+   restart` doesn't pick it up).
+3. `web_search()` now catches Tavily errors, logs at ERROR with the
+   traceback, and continues without web results. `app.py` sets
+   `logging.basicConfig` so our own loggers print `ERROR:` — otherwise the
+   metric filter would never see them.
+4. Security group SSH rule → My IP.
+
+**Findings:**
+
+- **The alarm only saw uvicorn's crash line before v2.** The app used
+  `print()` everywhere and never logged at ERROR; any try/except returning a
+  500 would have silenced the alarm. v2 adds one deliberate ERROR log; the
+  rest of the code still uses `print()`.
+- **No request/thread ID in the logs.** A run can only be found by time and
+  content; two concurrent users would interleave. Fix later: put `thread_id`
+  in every log line (Day 20 traces).
+- **Second `/ask` on a thread paused at the HITL gate re-ran the graph**
+  instead of returning 409. Not reproduced cleanly yet — open item.
+- HITL `instruction` still says "(y/n)" — CLI wording in an API response.
+- `Dockerfile` should set `ENV PYTHONUNBUFFERED=1` instead of relying on the
+  run flag.
+
+**Time:** TODO

@@ -7,6 +7,7 @@ path params) — see AskRequest / ResumeRequest below.
 Run with:
     uvicorn app:app --reload
 """
+import logging
 import secrets
 import sqlite3
 import time
@@ -26,6 +27,15 @@ from src.graph import build_graph
 from src.nodes import ABSTENTION
 from src.retrieval import index_size
 
+
+# Root handler so our own loggers (e.g. src.nodes) print a level name. Without
+# it, Python's last-resort handler emits the bare message and the CloudWatch
+# metric filter on "ERROR" never matches. Uvicorn's loggers don't propagate to
+# root, so this doesn't duplicate its lines.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:    %(name)s - %(message)s",
+)
 
 conn = sqlite3.connect(str(config.CHECKPOINT_DB), check_same_thread=False)
 saver = SqliteSaver(conn)
