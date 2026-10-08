@@ -590,3 +590,69 @@ monitoring tells you it is happening.
   run flag.
 
 **Time:** TODO
+
+## A4 — S3 as the index store — 2026-10-08
+
+**Goal:** a fresh box downloads a prebuilt Chroma index instead of
+re-embedding the corpus on every cold boot.
+
+**Setup:**
+
+- **Bucket:** `rag-index-272037674852` (ap-southeast-2), Block Public Access
+  on, SSE-S3. Object: `index/chroma-v2.tgz`.
+- **Tarball built from the deployed index, not my laptop:** on the box,
+  `docker stop rag` → `tar czf chroma-v2.tgz -C /opt/rag/state .chroma` →
+  `docker start rag`, then scp to the Mac and upload. Same image, same
+  chromadb (1.5.9), 716 chunks. The laptop's `.chroma` would have carried
+  arXiv version drift. Stopped the container first so SQLite wasn't
+  mid-write.
+- **IAM:** inline policy `rag-s3-index-read` on `rag-ec2-role` —
+  `s3:GetObject` on `arn:aws:s3:::rag-index-272037674852/index/*` only. No
+  ListBucket, no write: the box only reads the index. (Side effect: a wrong
+  key name returns 403, not 404.)
+- **Code (image v3):** `INDEX_S3_URI` (optional, unset on Render).
+  `ensure_index()`: marker present → nothing; else if `INDEX_S3_URI` set →
+  download with boto3, extract into a temp dir with `filter="data"`, require
+  `.chroma/.ingest_complete`, swap in as `CHROMA_DIR`; on any failure log
+  ERROR (A3 alarm catches it) and fall back to a full ingest. boto3 imported
+  lazily, pinned in `requirements.txt` + lockfile. Three new tests: restore
+  without ingest, archive without marker rejected → ingest, download failure
+  → ingest.
+- **Run B flags:** `-e INDEX_S3_URI=s3://rag-index-272037674852/index/chroma-v2.tgz
+  -e AWS_DEFAULT_REGION=ap-southeast-2`. Container got role credentials
+  from instance metadata without changing the hop limit.
+
+**Result (in-process timings from CloudWatch, both runs on v3, same box):**
+
+| Fresh boot | Index step | Detail |
+|---|---|---|
+| A — full ingest | **48.3s** | `build_vectorstore` 39.3s (OpenAI embeddings) |
+| B — S3 restore | **0.8s** | no `fetch_corpus` / `build_vectorstore` lines |
+
+- Both ended at `/ready` → 716 documents.
+- ~60× faster index step; more importantly, a cold boot no longer calls
+  OpenAI (no embedding cost, no boot failure if OpenAI is down) and every
+  box serves the identical index (fixes the 716 vs 692 drift).
+- **Wall clock not used for the comparison.** Run A measured 549s because
+  `start` was set before an ECR login failure and image pull. Run B measured
+  60s, most of it Python import/startup that A4 doesn't touch. The
+  in-process lines are the trustworthy numbers.
+
+**What broke:**
+
+1. `docker run ... :v3` on the box → `403 Forbidden` on the manifest HEAD.
+
+**How I diagnosed it / fix:** the box's ECR login was from the previous
+day; ECR auth tokens last 12 hours. Re-ran `aws ecr get-login-password |
+docker login ...` on the box. A long-lived box can't pull new images without
+re-logging in — user data / Terraform (A5) should log in at startup.
+
+**Open items:**
+
+- Index tarball is built by hand. Rebuild + re-upload whenever the corpus,
+  chunking, embedding model or chromadb version changes, and bump the name
+  (`chroma-v3.tgz`) rather than overwriting.
+- Re-time both runs with `start` set on the line before `docker run` if a
+  wall-clock number is needed for the README.
+
+**Time:** TODO

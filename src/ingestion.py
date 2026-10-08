@@ -3,7 +3,10 @@
 Run once (or whenever the corpus changes):
     python main.py ingest
 """
+import logging
 import shutil
+import tarfile
+import tempfile
 import time
 from pathlib import Path
 
@@ -15,6 +18,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from . import config
 from .corpus import fetch_corpus
+
+logger = logging.getLogger(__name__)
 
 
 def load_documents(data_dir: Path = config.DATA_DIR):
@@ -97,6 +102,43 @@ def ingest(rebuild: bool = True):
     return chunks
 
 
+def _download(uri: str, dest: Path) -> None:
+    """Fetch s3://bucket/key to dest. Its own function so tests can swap it out."""
+    import boto3  # lazy: Render never sets INDEX_S3_URI, so it never pays this import
+
+    bucket, _, key = uri.removeprefix("s3://").partition("/")
+    boto3.client("s3").download_file(bucket, key, str(dest))
+
+
+def _restore_from_s3(uri: str) -> bool:
+    """Download a prebuilt index tarball and install it as CHROMA_DIR.
+
+    The archive must contain a top-level ``.chroma/`` (built with
+    ``tar czf ... -C <state> .chroma``) that carries the completion marker —
+    an archive of a half-built index is rejected, same rule as a local one.
+    Returns False on any failure so the caller can fall back to a full build;
+    the failure is logged at ERROR, which the A3 CloudWatch alarm catches.
+    """
+    target = config.CHROMA_DIR
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
+            tmp = Path(tmp)
+            archive = tmp / "index.tgz"
+            _download(uri, archive)
+            with tarfile.open(archive) as tar:
+                tar.extractall(tmp / "x", filter="data")  # blocks ../ and absolute paths
+            restored = tmp / "x" / ".chroma"
+            if not (restored / _MARKER_NAME).exists():
+                raise RuntimeError(f"{uri} has no {_MARKER_NAME}; refusing a partial index")
+            shutil.rmtree(target, ignore_errors=True)
+            shutil.move(str(restored), str(target))
+        return True
+    except Exception:
+        logger.exception("index restore from %s failed; falling back to a full ingest", uri)
+        return False
+
+
 def ensure_index() -> None:
     """Build the index if it's missing or incomplete; leave a good one alone.
 
@@ -109,5 +151,8 @@ def ensure_index() -> None:
     if _marker_path().exists():
         return
     start = time.perf_counter()
+    if config.INDEX_S3_URI and _restore_from_s3(config.INDEX_S3_URI):
+        print(f"Index restored from {config.INDEX_S3_URI} in {time.perf_counter() - start:.1f}s")
+        return
     ingest(rebuild=True)
     print(f"Index build took {time.perf_counter() - start:.1f}s")

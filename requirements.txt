@@ -40,3 +40,5 @@ uvicorn==0.49.0
 pydantic==2.13.4                          # imported directly in app.py
 pydantic-settings==2.15.0                 # imported directly in src/config.py
 python-dotenv==1.2.2
+boto3==1.43.109                       # A4: index restore from S3 (src/ingestion.py)
+boto3==1.43.109                       # A4: index restore from S3 (src/ingestion.py)

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    index_s3_uri: str | None = None  # s3://bucket/key of a prebuilt index tarball; unset = build locally
     # --- Secrets ---
     openai_api_key: str                       # required: no default, no start without it
     tavily_api_key: str | None = None         # optional: web search degrades, app still serves
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
     chroma_dir: Path = ROOT / ".chroma"
     checkpoint_db: Path = ROOT / "checkpoint.db"
     collection_name: str = "agentic_rag"
+    # s3://bucket/key of a prebuilt index tarball (A4). Unset = build locally,
+    # which is what Render does, so the live demo never touches S3.
+    index_s3_uri: str | None = None
 
     # --- Chunking ---
     chunk_size: int = 1000
@@ -81,6 +85,7 @@ DATA_DIR = settings.data_dir
 CHROMA_DIR = settings.chroma_dir
 CHECKPOINT_DB = settings.checkpoint_db
 COLLECTION_NAME = settings.collection_name
+INDEX_S3_URI = settings.index_s3_uri
 
 CHUNK_SIZE = settings.chunk_size
 CHUNK_OVERLAP = settings.chunk_overlap
