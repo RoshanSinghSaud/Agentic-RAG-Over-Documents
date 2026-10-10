@@ -98,12 +98,26 @@ def load_golden(path: Path, abstention: str) -> list[dict]:
     return entries
 
 
-def run_one(graph, entry: dict, approve_web: bool, abstention: str) -> dict:
+def run_one(graph, entry: dict, approve_web: bool, abstention: str,
+            label: str) -> dict:
     """Run a single golden question through the graph on its own thread."""
     from langchain_core.messages import HumanMessage
     from langgraph.types import Command
 
-    run_config = {"configurable": {"thread_id": f"eval-{entry['id']}"}}
+    # Tracing context (Day 20). Ignored unless LANGSMITH_TRACING=true.
+    # Config metadata is inherited by every child run, so each LLM call made
+    # inside a node carries eval_label too; scripts/cost_by_node.py selects
+    # one eval's runs by that key alone.
+    run_config = {
+        "configurable": {"thread_id": f"eval-{entry['id']}"},
+        "run_name": "agentic-rag-eval",
+        "tags": ["eval"],
+        "metadata": {
+            "eval_label": label,
+            "question_id": entry["id"],
+            "category": entry["category"],
+        },
+    }
     result = graph.invoke(
         {
             "question": entry["question"],
@@ -351,7 +365,7 @@ def main() -> None:
     for i, entry in enumerate(golden, start=1):
         print(f"[{i}/{len(golden)}] {entry['id']} ({entry['category']}): "
               f"{entry['question']}", flush=True)
-        run = run_one(graph, entry, args.approve_web, ABSTENTION)
+        run = run_one(graph, entry, args.approve_web, ABSTENTION, args.label)
         hits, total = citation_hits(entry["expected_sources"], run["sources"])
         rows.append({
             **entry,
@@ -369,6 +383,12 @@ def main() -> None:
         asyncio.run(ragas_scores(rows, config.LLM_MODEL))
 
     write_outputs(rows, args.label)
+
+    # LangSmith uploads runs from a background thread. A short-lived script
+    # can exit before that queue drains and silently drop its last traces.
+    # No-op when tracing is off.
+    from langchain_core.tracers.langchain import wait_for_all_tracers
+    wait_for_all_tracers()
 
 
 if __name__ == "__main__":

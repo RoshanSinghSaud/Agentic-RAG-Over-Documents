@@ -122,7 +122,16 @@ AskResult = Annotated[Union[AskResponse, AskInterruptedResponse], Field(discrimi
 
 
 def _run_config(thread_id: str) -> dict:
-    return {"configurable": {"thread_id": thread_id}}
+    # run_name/tags only matter when LangSmith tracing is on
+    # (LANGSMITH_TRACING=true); otherwise they are ignored. The "api" tag
+    # separates live traffic from eval runs ("eval") in the same project.
+    # thread_id needs no copy here: LangGraph adds configurable values to the
+    # run metadata itself, which is what LangSmith's Threads view groups on.
+    return {
+        "configurable": {"thread_id": thread_id},
+        "run_name": "agentic-rag",
+        "tags": ["api"],
+    }
 
 
 def _citations(documents) -> list[Citation]:

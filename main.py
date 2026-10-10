@@ -112,7 +112,11 @@ def main():
         # later run (even after a restart) picks the conversation back up from
         # its checkpoints. Pass one explicitly to keep threads separate.
         thread_id = args[1] if len(args) > 1 else "default"
-        run_config = {"configurable": {"thread_id": thread_id}}
+        run_config = {
+            "configurable": {"thread_id": thread_id},
+            "run_name": "agentic-rag",  # LangSmith trace name (if tracing is on)
+            "tags": ["cli"],
+        }
         print(f"[thread: {thread_id}]")
         while True:
             question = input("\nQuestion (or 'quit'): ").strip()

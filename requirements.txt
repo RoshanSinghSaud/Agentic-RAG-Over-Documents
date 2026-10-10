@@ -41,4 +41,8 @@ pydantic==2.13.4                          # imported directly in app.py
 pydantic-settings==2.15.0                 # imported directly in src/config.py
 python-dotenv==1.2.2
 boto3==1.43.109                       # A4: index restore from S3 (src/ingestion.py)
-boto3==1.43.109                       # A4: index restore from S3 (src/ingestion.py)
+
+# --- Day 20: tracing client ---
+langsmith==0.12.4                         # already pulled in by langchain-core (that's
+                                          # what sends the traces); pinned here because
+                                          # scripts/cost_by_node.py imports it directly

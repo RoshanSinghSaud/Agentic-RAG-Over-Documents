@@ -656,3 +656,75 @@ re-logging in — user data / Terraform (A5) should log in at startup.
   wall-clock number is needed for the README.
 
 **Time:** TODO
+
+## Day 20 — Instrument the agent (LangSmith) — 2026-10-09
+
+**Goal:** trace every agent run (per-node latency, tokens in/out, cost per
+query) and find the most expensive node.
+
+**Setup:**
+
+- Tracing is env-only: `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`,
+  `LANGSMITH_PROJECT=agentic-rag`. langchain-core reads them and traces every
+  `graph.invoke`. Each LangGraph node becomes a child run, and every run
+  inside a node carries `metadata.langgraph_node`, so per-node attribution
+  needs no code in the nodes.
+- Code added: `run_name` + tags on every invoke (`api` / `cli` / `eval`);
+  eval runs also carry `eval_label`, `question_id`, `category` metadata;
+  `wait_for_all_tracers()` at the end of the eval so the last traces aren't
+  dropped on exit; `scripts/cost_by_node.py` pulls one label's runs back and
+  aggregates them by node.
+- Run: 20-question golden set, gate auto-denied (eval default), label
+  `day20-full`. Full table: `eval/results/cost_by_node_day20-full.md`.
+
+**Result:**
+
+| node | LLM calls / q | tokens in / q | $ / query | % of cost | % of time |
+|---|---:|---:|---:|---:|---:|
+| `grade_documents` | 10.8 | 4,542 | $0.000720 | **69%** | 30% |
+| `generate` | 1.0 | 904 | $0.000168 | 16% | 25% |
+| `grade_answer` | 1.1 | 912 | $0.000136 | 13% | 16% |
+| `transform_query` | 0.8 | 84 | $0.000021 | 2% | 12% |
+| `retrieve` | 0 | 0 | ~$0 | 0% | 17% |
+
+- **$0.00105 per query** mean (≈ $1.05 / 1,000), 6,442 tokens in / 147 out,
+  median 5.7s end to end.
+- **Most expensive node: `grade_documents`, not `generate`.** It makes one
+  LLM call per retrieved chunk (6 per round), each re-sending the system
+  prompt and the structured-output schema, and every CRAG rewrite runs
+  another full round: 18 grading calls on a query that goes down the
+  corrective path. Corrective-path queries cost 1.5× direct ones ($0.00132
+  vs $0.00086), and most of them end in an honest abstention, so that spend
+  buys an "I don't know".
+- `generate` is cheap because it sees only the chunks that survived grading
+  (often 2–4, or none).
+
+**Deliverable:** `docs/img/cost-by-node.png`, a LangSmith dashboard chart
+(Monitoring → Cost, Total, Sum · Run Type = llm · metadata `eval_label` =
+`day20-full` · grouped by metadata `langgraph_node`). Bars are totals over
+the 20 queries and match `cost_by_node.py` exactly: `grade_documents`
+$0.0144, `generate` $0.0034, `grade_answer` $0.0027, `transform_query`
+$0.0004. Divide by 20 for cost per query.
+
+**What broke:**
+
+1. The first eval run was killed mid-question (q05). Its trace stayed
+   `pending` in LangSmith: runs with no `end_time` and 0 tokens.
+
+**How I diagnosed it / fix:** listed q05's runs with the SDK. Six
+`ChatOpenAI` runs under `grade_documents` were `pending` with no end time.
+A process that dies mid-trace never sends the "run ended" update. The same
+happens if a container is OOM-killed or a free Render instance spins down
+mid-request. Fix: `cost_by_node.py` drops runs with no `end_time`, and the
+clean run uses a fresh label (`day20-full`).
+
+**Gotcha:** `.env` has `LANGSMITH_TRACING=true   # Layer 5: observability`.
+python-dotenv strips that inline comment, but `docker run --env-file` does
+not, so in a container the value would be the whole string and tracing
+would be silently off. Keep values in `.env` comment-free.
+
+**Day 21 target:** grading cost. Options: grade all chunks in one call
+instead of six; cap the rewrite budget for questions that grade 0/6 twice;
+send the graders to a cheaper or smaller-context model.
+
+**Time:** TODO
