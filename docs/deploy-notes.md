@@ -728,3 +728,105 @@ instead of six; cap the rewrite budget for questions that grade 0/6 twice;
 send the graders to a cheaper or smaller-context model.
 
 **Time:** TODO
+
+## Day 21 — Cost guardrails — 2026-10-12
+
+**Goal:** hard limits on what one request and one conversation can spend, a
+structured cost log, and a measured before/after cost per question on the
+20-question golden set.
+
+**What shipped (always on):**
+
+- **Global step budget** (`MAX_GRAPH_STEPS=20`). The graph's recursion limit
+  is set in `build_graph`; LangGraph exposes what's left as
+  `state["remaining_steps"]` (a `RemainingSteps` managed value). The CRAG and
+  Self-RAG routers only take a loop if every node up to END still fits, and
+  otherwise finish with a best-effort answer. The longest legitimate path is
+  17 nodes, so it never cuts a normal run. It turns a runaway loop (e.g. a
+  mis-set `MAX_RETRIEVAL_LOOPS`) into an answer instead of a
+  `GraphRecursionError` 500. Test: `test_runaway_rewrite_loop_is_stopped_by_the_step_budget`.
+- **Per-session token ceiling** (`SESSION_TOKEN_LIMIT=100000` per
+  `thread_id`). `src/budget.py` keeps a `session_usage` table in the
+  checkpoint SQLite file (UPSERT per request). `/ask` returns 429 once a
+  thread is at or past the limit; `/resume` is allowed so a paused turn can
+  finish.
+- **Structured cost log.** `src/cost.py` has a `CostTracker`, a LangChain
+  callback passed on every `graph.invoke`, that counts LLM calls and tokens
+  per model. One JSON line per request on stdout, e.g.
+  `{"event": "request_cost", "endpoint": "/ask", "status": "completed", "llm_calls": 9, "input_tokens": 6049, "cached_input_tokens": 2944, "cost_usd": 0.00101, "session_tokens": 6221, ...}`.
+  On EC2 the awslogs driver already ships stdout to `/rag/app`.
+- `main.py` prints `=== COST: … ===` per turn; the eval CSV/summary now have
+  `route`, `llm_calls`, tokens and `cost_usd` per question.
+
+**What shipped behind flags (off by default):**
+
+- `GRADE_BATCH`: grade all chunks of a round in one call instead of one per chunk.
+- `MODEL_ROUTING`: a rule-based classifier (`src/routing.py`) sends
+  "simple" questions' answers to `gpt-5-nano`.
+
+**Result:** 20 golden questions, one run per config, cost at list price
+(`CostTracker`), RAGAS scored with gpt-4o-mini:
+
+| config | $ / question | vs before | LLM calls / q | behaviour | faithfulness | answer correctness | context recall |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| before (shipped default) | $0.001055 | — | 13.7 | 15/20 | 0.982 | 0.678 | 0.856 |
+| routing only | $0.001025 | −3% | 14.0 | 14/20 | — | — | — |
+| batched grading | $0.000778 | **−26%** | 4.1 | 14/20 | 0.922 | 0.663 | 0.729 |
+| batched + routing | $0.000724 | **−31%** | 4.2 | 15/20 | 0.918 | 0.737 | 0.778 |
+
+Files: `eval/results/summary_day21-{off,batch,on2,route}.md`.
+
+- **Batched grading** is where the saving is: grading calls fall from 10.8
+  to 1.5 per question. Part of it is a behaviour change, not efficiency.
+  Graded together, gpt-4o-mini is more lenient: replaying the 36 recorded
+  rounds, the weak/sufficient decision changed in 7 of them, and prompt
+  wording didn't move that (three variants, 29–30/36). Fewer questions go
+  round the rewrite loop (8 → 5), q07 (capital of Nepal) never reaches the
+  web-search gate, and faithfulness drops 0.98 → 0.92.
+- **Model routing** saved 3% alone. Run without batching, gpt-5-nano twice
+  answered with no documents from its own knowledge (q07, q20), breaking the
+  "answer only from the corpus" contract. Graders were never routed:
+  replaying 60 real grading calls, gpt-4.1-nano rejected 16 and gpt-5-nano
+  7 of the 30 chunks gpt-4o-mini kept. A grader that rejects good chunks
+  sends questions round the rewrite loop, which costs more than it saves.
+- **Decision:** both levers off by default. At ~$1 per 1,000 questions,
+  grounding is worth more than 26–31%. Either is one env var.
+
+**What broke:**
+
+1. gpt-5-nano typed the abstention sentence with a curly apostrophe (’), so
+   the exact-string abstention checks missed it (q18 failed, and the Self-RAG
+   short-circuit didn't fire). Fix: `generate` normalises ’ → ' at the source.
+2. gpt-5-nano echoed part of its system prompt into one answer (q03).
+3. LangSmith's per-question cost for today's runs ($0.000968 before) was
+   lower than the tracker's ($0.001055).
+
+**How I diagnosed it:** (3) Pulled `prompt_tokens_details.cached_tokens`
+from the LangSmith runs. Day 20's first run had 0–6% of input tokens cached;
+today's reruns 53–77%. Re-running identical prompts hits OpenAI's prompt
+cache (half-price input on 1,024+ token prefixes), and LangSmith applies the
+discount. Unique user questions mostly won't, so before/after is compared at
+list price. The cost log records `cached_input_tokens` alongside.
+
+**Known limits:**
+
+- The session ceiling is checked before a request, so the request that
+  crosses it completes (overshoot ≤ one request, ~6–10k tokens).
+- `thread_id` is client-chosen: the ceiling bounds a conversation, not a
+  person. The per-IP rate limit bounds the person.
+- The step budget doesn't save money on normal traffic; it bounds the
+  worst case.
+- n = 20, one run per config: a one-question difference in behaviour pass is
+  within noise. Faithfulness and the gate regressions agree with the replay
+  data, so I trust the direction.
+
+**CloudWatch Logs Insights** (log group `/rag/app`), after the next EC2 deploy:
+
+```
+fields @timestamp, endpoint, status, route, llm_calls, cost_usd, latency_ms
+| filter event = "request_cost"
+| stats count(*) as requests, sum(cost_usd) as usd, avg(cost_usd) as usd_per_request,
+        avg(llm_calls) as calls, pct(latency_ms, 95) as p95_ms by bin(1h)
+```
+
+**Time:** TODO

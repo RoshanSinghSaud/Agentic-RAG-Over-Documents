@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Kept deliberately: langchain-openai reads OPENAI_API_KEY straight from
@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     max_generation_loops: int = 2   # max regenerations when the answer isn't grounded,
                                     # before returning the best-effort answer
 
+    # --- Layer 8 Day 21: cost guardrails ---
+    # The two cost levers ship OFF. Measured on the 20-question golden set
+    # (eval/results/summary_day21-*.md): batched grading -26% cost, routing
+    # +batching -31%, but faithfulness 0.98 -> 0.92 and the web-search gate
+    # fires less often. At ~$1 per 1,000 questions, grounding wins. One env
+    # var turns either on.
+    small_llm_model: str = "gpt-5-nano"  # answers simple questions when routing is on
+    model_routing: bool = False          # True: simple questions answered by small_llm_model
+    grade_batch: bool = False            # True: one grading call per round, not one per chunk
+    # Global budget on node executions per invoke, above the two loop caps.
+    # The longest legitimate path is 17 nodes, so 20 never cuts a normal run;
+    # it stops a runaway one (e.g. a mis-set loop cap) with an answer, not a 500.
+    max_graph_steps: int = Field(20, ge=10)
+    session_token_limit: int = 100_000   # per thread_id; /ask refuses past it
+
 
 try:
     settings = Settings()
@@ -100,3 +115,9 @@ MAX_RETRIEVAL_LOOPS = settings.max_retrieval_loops
 WEB_SEARCH_K = settings.web_search_k
 
 MAX_GENERATION_LOOPS = settings.max_generation_loops
+
+SMALL_LLM_MODEL = settings.small_llm_model
+MODEL_ROUTING = settings.model_routing
+GRADE_BATCH = settings.grade_batch
+MAX_GRAPH_STEPS = settings.max_graph_steps
+SESSION_TOKEN_LIMIT = settings.session_token_limit

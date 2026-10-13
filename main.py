@@ -21,6 +21,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from src import config, ingestion
+from src.cost import CostTracker
 from src.graph import build_graph
 from src.nodes import ABSTENTION
 
@@ -43,6 +44,8 @@ def run_query(question: str, run_config: dict):
     #     that invariant explicit instead of depending on node order.
     # (`messages` is genuinely thread-scoped and appends via add_messages;
     # the answer side is appended by the graph's `finalize` node.)
+    tracker = CostTracker()  # Day 21: tokens + cost for this turn
+    run_config = {**run_config, "callbacks": [tracker]}
     result = graph.invoke(
         {
             "question": question,
@@ -100,6 +103,11 @@ def run_query(question: str, run_config: dict):
         loc = src + (f", p.{page}" if page is not None else "")
         tag = " [web]" if d.metadata.get("web") else ""
         print(f"[{i}] {loc}{tag}")
+
+    usage = tracker.summary()
+    print(f"\n=== COST: {usage['llm_calls']} LLM calls · "
+          f"{usage['input_tokens'] + usage['output_tokens']:,} tokens · "
+          f"${usage['cost_usd']:.5f} ===")
 
 
 def main():

@@ -30,7 +30,10 @@ from dotenv import load_dotenv
 from langsmith import Client
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
+
+from src.cost import price_for  # noqa: E402  (stdlib + langchain-core only)
 
 # Graph order, so the table reads top to bottom like the flow.
 NODES = [
@@ -38,10 +41,6 @@ NODES = [
     "web_search", "generate", "grade_answer", "finalize",
 ]
 
-# Used only if LangSmith returned no cost for a run (model missing from its
-# price table). USD per 1M tokens, (input, output). Check against
-# https://platform.openai.com/docs/pricing if you change LLM_MODEL.
-FALLBACK_PRICE = {"gpt-4o-mini": (0.15, 0.60)}
 
 
 def _meta(run) -> dict:
@@ -58,11 +57,11 @@ def _cost(run) -> tuple[float, bool]:
     """(cost in USD, True if computed locally from the fallback price)."""
     if run.total_cost is not None:
         return float(run.total_cost), False
-    model = _meta(run).get("ls_model_name", "")
-    for name, (p_in, p_out) in FALLBACK_PRICE.items():
-        if model.startswith(name):
-            return ((run.prompt_tokens or 0) * p_in
-                    + (run.completion_tokens or 0) * p_out) / 1e6, True
+    # LangSmith had no price for the model: fall back to src/cost.py's table.
+    price = price_for(_meta(run).get("ls_model_name", ""))
+    if price:
+        return ((run.prompt_tokens or 0) * price[0]
+                + (run.completion_tokens or 0) * price[1]) / 1e6, True
     return 0.0, True
 
 
@@ -183,7 +182,7 @@ def summarise(runs: list, label: str, project: str) -> str:
     ]
     if fallback:
         lines.append(f"\n{fallback} LLM run(s) had no LangSmith cost; priced "
-                     "locally from FALLBACK_PRICE.")
+                     "locally from src/cost.py PRICES.")
     return "\n".join(lines) + "\n"
 
 

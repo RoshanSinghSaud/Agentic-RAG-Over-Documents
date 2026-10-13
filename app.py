@@ -23,6 +23,8 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from src import config, ingestion
+from src.budget import SessionLedger
+from src.cost import CostTracker, log_request_cost
 from src.graph import build_graph
 from src.nodes import ABSTENTION
 from src.retrieval import index_size
@@ -40,6 +42,7 @@ logging.basicConfig(
 conn = sqlite3.connect(str(config.CHECKPOINT_DB), check_same_thread=False)
 saver = SqliteSaver(conn)
 graph = build_graph(checkpointer=saver)
+ledger = SessionLedger(config.CHECKPOINT_DB)  # Day 21: tokens spent per thread_id
 
 
 @asynccontextmanager
@@ -134,6 +137,36 @@ def _run_config(thread_id: str) -> dict:
     }
 
 
+def _invoke_tracked(endpoint: str, thread_id: str, graph_input, run_config: dict) -> dict:
+    """graph.invoke with a CostTracker attached. Whatever happens, the tokens
+    spent are added to the session's total and one JSON cost line is logged:
+    a request that fails halfway still spent money."""
+    tracker = CostTracker()
+    started = time.perf_counter()
+    status, result = "failed", {}
+    try:
+        result = graph.invoke(graph_input, config={**run_config, "callbacks": [tracker]})
+        status = "needs_approval" if "__interrupt__" in result else "completed"
+        return result
+    finally:
+        usage = tracker.summary()
+        session_tokens = ledger.add(
+            thread_id, usage["input_tokens"] + usage["output_tokens"], usage["cost_usd"]
+        )
+        log_request_cost(
+            endpoint=endpoint,
+            thread_id=thread_id,
+            status=status,
+            route=result.get("route"),
+            rewrites=result.get("loop_count"),
+            regenerations=result.get("generate_count"),
+            latency_ms=round(1000 * (time.perf_counter() - started)),
+            session_tokens=session_tokens,
+            session_token_limit=config.SESSION_TOKEN_LIMIT,
+            **usage,
+        )
+
+
 def _citations(documents) -> list[Citation]:
     citations = []
     for i, d in enumerate(documents, start=1):
@@ -194,7 +227,26 @@ def ask(request: AskRequest) -> AskResult:
             detail=f"thread '{request.thread_id}' is paused awaiting approval; call /resume instead.",
         )
 
-    result = graph.invoke(
+    # Day 21: per-session token ceiling. Checked here, not in /resume: a turn
+    # that is already paused at the approval gate is allowed to finish.
+    used = ledger.tokens_used(request.thread_id)
+    if used >= config.SESSION_TOKEN_LIMIT:
+        log_request_cost(
+            endpoint="/ask", thread_id=request.thread_id, status="refused_session_budget",
+            session_tokens=used, session_token_limit=config.SESSION_TOKEN_LIMIT,
+            llm_calls=0, input_tokens=0, output_tokens=0, cost_usd=0.0,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"session token budget used up for thread '{request.thread_id}': "
+                f"{used:,} of {config.SESSION_TOKEN_LIMIT:,} tokens. Start a new thread_id."
+            ),
+        )
+
+    result = _invoke_tracked(
+        "/ask",
+        request.thread_id,
         {
             "question": request.question,
             "messages": [HumanMessage(content=request.question)],
@@ -202,8 +254,9 @@ def ask(request: AskRequest) -> AskResult:
             "generate_count": 0,
             "web_search": False,
             "web_search_approved": False,
+            "route": None,  # turn-scoped too: an interrupted turn has no route yet
         },
-        config=run_config,
+        run_config,
     )
     return _to_result(result, request.thread_id, request.question)
 
@@ -220,7 +273,9 @@ def resume(request: ResumeRequest) -> AskResult:
         )
     question_before = snapshot.values.get("question", "")
 
-    result = graph.invoke(Command(resume=request.approved), config=run_config)
+    result = _invoke_tracked(
+        "/resume", request.thread_id, Command(resume=request.approved), run_config
+    )
     return _to_result(result, request.thread_id, question_before)
 
 @app.get("/ready")

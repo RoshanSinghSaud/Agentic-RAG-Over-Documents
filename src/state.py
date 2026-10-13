@@ -9,6 +9,7 @@ from typing import List, TypedDict, Annotated
 
 from langchain_core.documents import Document
 from langgraph.graph.message import add_messages
+from langgraph.managed import RemainingSteps
 
 
 class GraphState(TypedDict, total=False):
@@ -26,3 +27,9 @@ class GraphState(TypedDict, total=False):
     messages: Annotated[list,add_messages]           # Layer 4: multi-turn memory
 
     web_search_approved: bool # HITL
+
+    # --- Layer 8 Day 21: cost guardrails ---
+    route: str               # "simple" / "complex": which model generate used this turn
+    # Filled in by LangGraph on every step (never written by a node): how many
+    # more steps fit under the recursion limit. The routers' global step budget.
+    remaining_steps: RemainingSteps
