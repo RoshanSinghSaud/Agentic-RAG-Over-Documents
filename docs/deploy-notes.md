@@ -530,10 +530,12 @@ monitoring tells you it is happening.
 **Result:**
 
 - One full agent run found in Logs Insights (POST /ask → TRANSFORM → HITL →
-  WEB SEARCH → GRADE ANSWER → POST /resume 200). Screenshot: TODO path.
+  WEB SEARCH → GRADE ANSWER → POST /resume 200). Screenshots:
+  `output documentation/cloud/cloud watchlogs_1.png`, `cloud watchlogs_2.png`.
 - Alarm fired on purpose: restarted with `-e OPENAI_API_KEY=sk-bad`, one
   `/ask` → 500 → uvicorn `ERROR: Exception in ASGI application` → alarm
-  In alarm → email. Screenshot: TODO path. Time from request to email: ___.
+  In alarm → email. The alarm email is kept locally, not in the repo: it
+  shows my email address and an SNS unsubscribe link. Time from request to email: ___.
 
 **What broke:**
 
@@ -699,7 +701,7 @@ query) and find the most expensive node.
 - `generate` is cheap because it sees only the chunks that survived grading
   (often 2–4, or none).
 
-**Deliverable:** `docs/img/cost-by-node.png`, a LangSmith dashboard chart
+**Deliverable:** `output documentation/cloud/cost-by-node.png`, a LangSmith dashboard chart
 (Monitoring → Cost, Total, Sum · Run Type = llm · metadata `eval_label` =
 `day20-full` · grouped by metadata `langgraph_node`). Bars are totals over
 the 20 queries and match `cost_by_node.py` exactly: `grade_documents`

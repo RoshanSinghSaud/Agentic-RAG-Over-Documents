@@ -38,3 +38,7 @@ data/*.md
 output documentation/demo_video_script.md
 docs/deployment-roadmap*
 chroma-*.tgz
+
+# AWS alarm email exports: contain a personal email address and an SNS
+# unsubscribe link. Keep them local.
+output documentation/cloud/*.pdf
