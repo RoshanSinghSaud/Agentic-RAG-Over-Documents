@@ -37,9 +37,9 @@ The build is layered: each layer adds one capability and ends in a git tag.
 | 5 — Eval (RAGAS + golden set, caught a real data bug) | `v0.5-eval` | **done** |
 | 6 — API (FastAPI `/ask` + `/resume` + `/health`, 409 guards) | `v0.6-api` | **done** |
 | 7 — Docker (Dockerfile + compose) | `v0.7-docker` | **done — verified live** |
-| 8 — Deploy + ops (config, API hardening, Render, AWS, tracing, cost guardrails) | — | **in progress** on branch `layer8-deploy` |
+| 8 — Deploy + ops (config, API hardening, Render, AWS, tracing, cost guardrails) | `v0.8-deploy` | **done — verified live** |
 
-What Layer 8 has shipped so far:
+What Layer 8 shipped:
 
 | Step | What shipped |
 | --- | --- |
