@@ -8,10 +8,12 @@ multi-turn conversations, and asks a human before it searches the web. It runs a
 a FastAPI service in Docker, is deployed on Render and AWS, and is traced
 per node in LangSmith with cost guardrails on every request.
 
-**Live demo:** <https://agentic-rag-over-documents.onrender.com/docs>. `/ask` and
-`/resume` need an `X-API-Key` header (key on request); `/health` and `/ready`
-are open. It's on Render's free tier, so the first request after a quiet spell
-waits for the container to wake.
+**Live demo:** <https://agentic-rag-over-documents.onrender.com/docs>
+
+`/ask` and `/resume` need an `X-API-Key` header; email me at
+roshansinghsaud2001@gmail.com for a key. `/health` and `/ready` are open.
+Free hosting: the first request after 15 idle minutes can take about a minute
+while the container wakes.
 
 ## Results at a glance
 
