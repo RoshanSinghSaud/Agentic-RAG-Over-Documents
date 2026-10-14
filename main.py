@@ -21,6 +21,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from src import config, ingestion
+from src.cost import CostTracker
 from src.graph import build_graph
 from src.nodes import ABSTENTION
 
@@ -43,6 +44,8 @@ def run_query(question: str, run_config: dict):
     #     that invariant explicit instead of depending on node order.
     # (`messages` is genuinely thread-scoped and appends via add_messages;
     # the answer side is appended by the graph's `finalize` node.)
+    tracker = CostTracker()  # Day 21: tokens + cost for this turn
+    run_config = {**run_config, "callbacks": [tracker]}
     result = graph.invoke(
         {
             "question": question,
@@ -101,6 +104,11 @@ def run_query(question: str, run_config: dict):
         tag = " [web]" if d.metadata.get("web") else ""
         print(f"[{i}] {loc}{tag}")
 
+    usage = tracker.summary()
+    print(f"\n=== COST: {usage['llm_calls']} LLM calls · "
+          f"{usage['input_tokens'] + usage['output_tokens']:,} tokens · "
+          f"${usage['cost_usd']:.5f} ===")
+
 
 def main():
     args = sys.argv[1:]
@@ -112,7 +120,11 @@ def main():
         # later run (even after a restart) picks the conversation back up from
         # its checkpoints. Pass one explicitly to keep threads separate.
         thread_id = args[1] if len(args) > 1 else "default"
-        run_config = {"configurable": {"thread_id": thread_id}}
+        run_config = {
+            "configurable": {"thread_id": thread_id},
+            "run_name": "agentic-rag",  # LangSmith trace name (if tracing is on)
+            "tags": ["cli"],
+        }
         print(f"[thread: {thread_id}]")
         while True:
             question = input("\nQuestion (or 'quit'): ").strip()

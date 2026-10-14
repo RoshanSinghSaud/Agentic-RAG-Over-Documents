@@ -22,7 +22,7 @@ one budget); regenerations by config.MAX_GENERATION_LOOPS (`generate_count`).
 """
 from langgraph.graph import END, START, StateGraph
 
-from . import nodes
+from . import config, nodes
 from .state import GraphState
 
 
@@ -88,7 +88,13 @@ def build_graph(checkpointer=None):
     )
     g.add_edge("finalize", END)
 
-    return g.compile(checkpointer=checkpointer)
+    # Day 21: the recursion limit is the global step budget. The routers read
+    # what's left of it (state["remaining_steps"]) and finish early rather than
+    # let LangGraph raise GraphRecursionError. Bound here so every caller (API,
+    # CLI, eval) gets the same budget without passing it.
+    return g.compile(checkpointer=checkpointer).with_config(
+        recursion_limit=config.MAX_GRAPH_STEPS
+    )
 
 
 # Checkpointer-less compile for import-time uses (e.g. view_graph.py rendering

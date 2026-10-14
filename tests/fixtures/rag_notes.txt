@@ -1,0 +1,31 @@
+Retrieval-Augmented Generation pairs a language model with a non-parametric
+memory: a document index it can query at inference time. Instead of relying
+solely on facts baked into its weights during training, the model retrieves
+a small set of relevant passages for the current question and conditions its
+answer on them. This lets a model answer questions about information it was
+never trained on, and lets that information be updated by editing the index
+rather than retraining the model.
+
+A typical RAG pipeline has two stages. The retriever encodes the question
+and every candidate passage into a shared vector space, usually with a dense
+encoder trained so that a question's embedding lands close to the embeddings
+of passages that answer it, then returns the top-scoring passages by cosine
+or dot-product similarity. The generator, usually a sequence-to-sequence or
+decoder-only language model, then reads the question together with the
+retrieved passages and produces the final answer, often with the retrieved
+text spliced directly into the prompt.
+
+Dense retrieval alone can miss passages that share exact keywords with the
+question but sit far from it in embedding space, particularly for rare
+terms, identifiers, or exact phrases. Combining a dense retriever with a
+sparse, keyword-based retriever like BM25 and fusing their rankings —
+commonly with Reciprocal Rank Fusion — tends to recover more relevant
+passages than either retriever alone, since the two make different kinds of
+mistakes.
+
+Because retrieval quality bounds answer quality, later work added a
+correction step: grade the retrieved passages for relevance before
+generating, and fall back to a broader search — even the open web — when
+the retrieved set is too weak to support an answer. This turns a single
+retrieve-then-generate pass into a small decision loop, which is the core
+idea behind corrective retrieval-augmented generation.

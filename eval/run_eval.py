@@ -98,12 +98,30 @@ def load_golden(path: Path, abstention: str) -> list[dict]:
     return entries
 
 
-def run_one(graph, entry: dict, approve_web: bool, abstention: str) -> dict:
+def run_one(graph, entry: dict, approve_web: bool, abstention: str,
+            label: str) -> dict:
     """Run a single golden question through the graph on its own thread."""
     from langchain_core.messages import HumanMessage
     from langgraph.types import Command
 
-    run_config = {"configurable": {"thread_id": f"eval-{entry['id']}"}}
+    from src.cost import CostTracker
+    tracker = CostTracker()  # Day 21: cost per question, no LangSmith needed
+
+    # Tracing context (Day 20). Ignored unless LANGSMITH_TRACING=true.
+    # Config metadata is inherited by every child run, so each LLM call made
+    # inside a node carries eval_label too; scripts/cost_by_node.py selects
+    # one eval's runs by that key alone.
+    run_config = {
+        "configurable": {"thread_id": f"eval-{entry['id']}"},
+        "run_name": "agentic-rag-eval",
+        "tags": ["eval"],
+        "metadata": {
+            "eval_label": label,
+            "question_id": entry["id"],
+            "category": entry["category"],
+        },
+        "callbacks": [tracker],
+    }
     result = graph.invoke(
         {
             "question": entry["question"],
@@ -137,6 +155,8 @@ def run_one(graph, entry: dict, approve_web: bool, abstention: str) -> dict:
         "generate_count": result.get("generate_count", 0),
         "answer_grounded": result.get("answer_grounded"),
         "answer_useful": result.get("answer_useful"),
+        "route": result.get("route"),
+        **{k: v for k, v in tracker.summary().items() if k != "models"},
     }
 
 
@@ -250,12 +270,15 @@ CSV_COLUMNS = [
     "id", "category", "question", "behavior_pass", "abstained", "gate_fired",
     "citation_hits", "citation_total", "rewritten", "loop_count",
     "generate_count", "answer_grounded", "answer_useful", "faithfulness",
-    "answer_correctness", "context_precision", "context_recall", "answer",
+    "answer_correctness", "context_precision", "context_recall",
+    "route", "llm_calls", "input_tokens", "output_tokens", "cost_usd", "answer",
 ]
 
 
-def _fmt(v):
-    return f"{v:.3f}" if isinstance(v, float) else ("" if v is None else v)
+def _fmt(v, key: str = ""):
+    if isinstance(v, float):
+        return f"{v:.8f}" if key == "cost_usd" else f"{v:.3f}"  # costs are ~$0.001
+    return "" if v is None else v
 
 
 def write_outputs(rows: list[dict], label: str) -> None:
@@ -265,7 +288,7 @@ def write_outputs(rows: list[dict], label: str) -> None:
         w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         w.writeheader()
         for r in rows:
-            w.writerow({k: _fmt(r.get(k)) for k in CSV_COLUMNS})
+            w.writerow({k: _fmt(r.get(k), k) for k in CSV_COLUMNS})
 
     # per-category summary
     cats: dict[str, list[dict]] = {}
@@ -302,8 +325,19 @@ def write_outputs(rows: list[dict], label: str) -> None:
         f"| {avg([r.get('context_precision') for r in rows])} "
         f"| {avg([r.get('context_recall') for r in rows])} |",
         "",
-        "Failures:",
     ]
+    costs = [r["cost_usd"] for r in rows if r.get("cost_usd") is not None]
+    if costs:
+        from src import config as cfg
+        lines += [
+            f"**Cost:** ${sum(costs) / len(costs):.6f} per question (mean) · "
+            f"{sum(r['llm_calls'] for r in rows) / len(rows):.1f} LLM calls · "
+            f"{sum(r['input_tokens'] + r['output_tokens'] for r in rows) / len(rows):,.0f} tokens "
+            f"· MODEL_ROUTING={cfg.MODEL_ROUTING} GRADE_BATCH={cfg.GRADE_BATCH} "
+            f"MAX_GRAPH_STEPS={cfg.MAX_GRAPH_STEPS}",
+            "",
+        ]
+    lines += ["Failures:"]
     fails = [r for r in rows if not r["behavior_pass"]]
     lines += [f"- **{r['id']}** ({r['category']}): {r['question']}" for r in fails] or ["- none"]
 
@@ -351,7 +385,7 @@ def main() -> None:
     for i, entry in enumerate(golden, start=1):
         print(f"[{i}/{len(golden)}] {entry['id']} ({entry['category']}): "
               f"{entry['question']}", flush=True)
-        run = run_one(graph, entry, args.approve_web, ABSTENTION)
+        run = run_one(graph, entry, args.approve_web, ABSTENTION, args.label)
         hits, total = citation_hits(entry["expected_sources"], run["sources"])
         rows.append({
             **entry,
@@ -369,6 +403,12 @@ def main() -> None:
         asyncio.run(ragas_scores(rows, config.LLM_MODEL))
 
     write_outputs(rows, args.label)
+
+    # LangSmith uploads runs from a background thread. A short-lived script
+    # can exit before that queue drains and silently drop its last traces.
+    # No-op when tracing is off.
+    from langchain_core.tracers.langchain import wait_for_all_tracers
+    wait_for_all_tracers()
 
 
 if __name__ == "__main__":

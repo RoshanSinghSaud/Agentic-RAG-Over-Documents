@@ -6,6 +6,7 @@ Layer map: retrieve/generate (L1) - document grading, query rewrite, web
 fallback (L2, CRAG) - answer grading (L3, Self-RAG) - finalize and the human
 approval gate (L4, memory + HITL).
 """
+import logging
 from typing import List, Literal
 
 from langchain_core.documents import Document
@@ -14,20 +15,31 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from . import config, retrieval
+from . import config, retrieval, routing
 from .state import GraphState
 
 from langgraph.types import interrupt
 
-_llm = None
+logger = logging.getLogger(__name__)
+
+_llms: dict[str, ChatOpenAI] = {}
 _tavily = None
 
 
-def _get_llm() -> ChatOpenAI:
-    global _llm
-    if _llm is None:
-        _llm = ChatOpenAI(model=config.LLM_MODEL, temperature=0)
-    return _llm
+def _get_llm(model: str | None = None) -> ChatOpenAI:
+    """One cached client per model name; default config.LLM_MODEL.
+
+    gpt-5-family models are reasoning models: they reject `temperature`, and
+    their hidden reasoning tokens are billed as output, so they run with
+    reasoning_effort="minimal".
+    """
+    model = model or config.LLM_MODEL
+    if model not in _llms:
+        if model.startswith("gpt-5"):
+            _llms[model] = ChatOpenAI(model=model, reasoning_effort="minimal")
+        else:
+            _llms[model] = ChatOpenAI(model=model, temperature=0)
+    return _llms[model]
 
 
 def _get_tavily():
@@ -109,6 +121,15 @@ def retrieve(state: GraphState) -> GraphState:
     return {"documents": docs}
 
 
+def _turn_question(state: GraphState) -> str:
+    """This turn's question as the user asked it: the last human message.
+    state["question"] may have been rewritten by transform_query."""
+    for m in reversed(state.get("messages", [])):
+        if m.type == "human":
+            return m.content
+    return state["question"]
+
+
 def generate(state: GraphState) -> GraphState:
     """Generate an answer grounded in the retrieved chunks, with inline citations."""
     context = _format_context(state["documents"])
@@ -117,11 +138,23 @@ def generate(state: GraphState) -> GraphState:
     # for retrieval — the raw, originally-phrased question (the one that actually
     # signals "this is about our conversation") only survives in the last message.
     history = state.get("messages", [])
-    chain = GENERATE_PROMPT | _get_llm()
+
+    # Day 21 model routing: a simple question is answered by the small model.
+    # Classified on the user's own wording, not on a rewrite.
+    route = routing.classify(_turn_question(state)) if config.MODEL_ROUTING else "complex"
+    model = config.SMALL_LLM_MODEL if route == "simple" else config.LLM_MODEL
+    print(f"--- GENERATE: {route} -> {model} ---")
+
+    chain = GENERATE_PROMPT | _get_llm(model)
     answer = chain.invoke(
         {"context": context, "question": state["question"], "history": history}
-    ).content
-    return {"generation": answer}
+    ).text  # .text, not .content: str for every model, incl. block-style output
+    # gpt-5-nano sometimes types the abstention sentence with a curly
+    # apostrophe (’). Every abstention check matches the exact string, so a
+    # curly one slips past grade_answer's short-circuit and the eval. Normalise
+    # once, here, at the source.
+    answer = answer.replace("\u2019", "'")
+    return {"generation": answer, "route": route}
 
 
 # =========================================================================
@@ -172,6 +205,57 @@ TRANSFORM_PROMPT = ChatPromptTemplate.from_messages(
 )
 
 
+class ChunkGrade(BaseModel):
+    """One verdict inside a batched grading call."""
+
+    chunk: int = Field(description="The chunk's number, as shown in brackets.")
+    binary_score: Literal["yes", "no"] = Field(
+        description="Is this chunk relevant to the question? 'yes' or 'no'."
+    )
+
+
+class GradeDocumentsBatch(BaseModel):
+    """One relevance verdict per retrieved chunk."""
+
+    grades: List[ChunkGrade] = Field(
+        description="Exactly one entry per chunk, in the order given."
+    )
+
+
+# Same grading instructions as GRADE_PROMPT, sent once for the whole round
+# instead of once per chunk (Day 21: the per-chunk fan-out was 69% of cost).
+GRADE_BATCH_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            GRADE_PROMPT.messages[0].prompt.template
+            + " You will be given several numbered chunks: grade each one "
+            "independently, on its own merits, and return exactly one verdict "
+            "per chunk.",
+        ),
+        ("human", "Retrieved chunks:\n\n{chunks}\n\nUser question: {question}"),
+    ]
+)
+
+
+def _grade_one_call(question: str, docs) -> List[str]:
+    """Grade every chunk in a single LLM call; returns 'yes'/'no' per chunk.
+
+    The model labels each verdict with the chunk's number, and verdicts are
+    matched back by that number, not by position. A chunk the model skipped is
+    kept (fail open): the grader exists to drop clear noise, and the answer
+    graders downstream still check grounding.
+    """
+    numbered = "\n\n".join(f"[{i}]\n{d.page_content}" for i, d in enumerate(docs, 1))
+    grader = GRADE_BATCH_PROMPT | _get_llm().with_structured_output(GradeDocumentsBatch)
+    result = grader.invoke({"question": question, "chunks": numbered})
+    by_chunk = {g.chunk: g.binary_score for g in result.grades}
+    missing = [i for i in range(1, len(docs) + 1) if i not in by_chunk]
+    if missing:
+        logger.warning("batched grader returned no verdict for chunk(s) %s; keeping them", missing)
+    return [by_chunk.get(i, "yes") for i in range(1, len(docs) + 1)]
+
+
 def grade_documents(state: GraphState) -> GraphState:
     """CRAG step 1: LLM-grade every retrieved chunk for relevance.
 
@@ -185,12 +269,16 @@ def grade_documents(state: GraphState) -> GraphState:
     question = state["question"]
     docs = state["documents"]
 
-    grader = GRADE_PROMPT | _get_llm().with_structured_output(GradeDocument)
-    verdicts = grader.batch(
-        [{"question": question, "document": d.page_content} for d in docs]
-    )
+    if config.GRADE_BATCH and len(docs) > 1:
+        scores = _grade_one_call(question, docs)
+    else:
+        grader = GRADE_PROMPT | _get_llm().with_structured_output(GradeDocument)
+        verdicts = grader.batch(
+            [{"question": question, "document": d.page_content} for d in docs]
+        )
+        scores = [v.binary_score for v in verdicts]
 
-    relevant = [d for d, v in zip(docs, verdicts) if v.binary_score == "yes"]
+    relevant = [d for d, s in zip(docs, scores) if s == "yes"]
     weak = len(relevant) < config.MIN_RELEVANT_DOCS
 
     print(
@@ -220,10 +308,19 @@ def web_search(state: GraphState) -> GraphState:
     Gated by ``human_approval_gate`` (Layer 4): this node only runs after an
     explicit human approval, since it's the one action that reaches outside
     the document corpus.
+
+    Degrades instead of crashing: if Tavily fails (missing/invalid key,
+    network, quota), log at ERROR and continue to generate with the corpus
+    documents only; the generate prompt's abstention rule keeps that answer
+    honest. Before this, any Tavily failure surfaced as a 500 from /resume.
     """
     question = state["question"]
     print(f"--- WEB SEARCH (Tavily): {question} ---")
-    response = _get_tavily().search(query=question, max_results=config.WEB_SEARCH_K)
+    try:
+        response = _get_tavily().search(query=question, max_results=config.WEB_SEARCH_K)
+    except Exception:
+        logger.exception("web_search failed; continuing without web results")
+        return {"web_search": False}
 
     web_docs: List[Document] = [
         Document(
@@ -233,6 +330,30 @@ def web_search(state: GraphState) -> GraphState:
         for r in response.get("results", [])
     ]
     return {"documents": state["documents"] + web_docs, "web_search": False}
+
+
+# =========================================================================
+# Day 21 — global step budget
+# =========================================================================
+# MAX_RETRIEVAL_LOOPS and MAX_GENERATION_LOOPS cap each loop on its own; this
+# is the budget above both. LangGraph fills state["remaining_steps"] from the
+# recursion limit, which build_graph sets to config.MAX_GRAPH_STEPS. A router
+# only takes a branch if every node it commits to, all the way to END, still
+# fits. Otherwise it takes the cheapest way out, so the run ends with a
+# best-effort answer instead of a GraphRecursionError (an HTTP 500).
+
+# Nodes each branch still needs before END.
+STEPS_REGENERATE = 3      # generate -> grade_answer -> finalize
+STEPS_WEB_PATH = 5        # gate -> web_search -> generate -> grade_answer -> finalize
+STEPS_REWRITE_ROUND = 6   # transform_query -> retrieve -> grade_documents, then finish
+
+
+def _fits(state: GraphState, steps: int) -> bool:
+    """Can `steps` more nodes still run? A router sees the same
+    remaining_steps as the node it follows; the next node gets one fewer, and
+    one with 0 left can't run. Missing outside a compiled graph (router unit
+    tests), which means no limit."""
+    return state.get("remaining_steps", 10**6) - 1 >= steps
 
 
 def decide_after_grading(state: GraphState) -> str:
@@ -246,8 +367,13 @@ def decide_after_grading(state: GraphState) -> str:
     if not state.get("web_search", False):
         return "generate"
     if state.get("loop_count", 0) < config.MAX_RETRIEVAL_LOOPS:
-        return "transform_query"
-    return "web_search"
+        if _fits(state, STEPS_REWRITE_ROUND):
+            return "transform_query"
+        print("--- STEP BUDGET: no room for another rewrite ---")
+    if _fits(state, STEPS_WEB_PATH):
+        return "web_search"
+    print("--- STEP BUDGET: spent -> answering from current documents ---")
+    return "generate"
 
 
 # =========================================================================
@@ -389,13 +515,19 @@ def decide_after_answer(state: GraphState) -> str:
 
     if not grounded:
         if state.get("generate_count", 0) < config.MAX_GENERATION_LOOPS:
-            return "generate"
+            if _fits(state, STEPS_REGENERATE):
+                return "generate"
+            print("--- STEP BUDGET: spent -> accept best effort ---")
+            return "end"
         print("--- SELF-RAG: generation budget exhausted -> accept best effort ---")
         return "end"
 
     # grounded but not useful -> better retrieval, if we still have budget
     if state.get("loop_count", 0) < config.MAX_RETRIEVAL_LOOPS:
-        return "transform_query"
+        if _fits(state, STEPS_REWRITE_ROUND):
+            return "transform_query"
+        print("--- STEP BUDGET: spent -> accept best effort ---")
+        return "end"
     print("--- SELF-RAG: rewrite budget exhausted -> accept best effort ---")
     return "end"
 

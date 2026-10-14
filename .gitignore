@@ -33,3 +33,12 @@ data/*.pdf
 data/*.txt
 data/*.md
 !data/README.md
+
+# Personal / not for the public repo
+output documentation/demo_video_script.md
+docs/deployment-roadmap*
+chroma-*.tgz
+
+# AWS alarm email exports: contain a personal email address and an SNS
+# unsubscribe link. Keep them local.
+output documentation/cloud/*.pdf
